@@ -15,19 +15,63 @@ def createOpportunity(sf, oportunidad_data: dict) -> str:
         print(f"Error al crear la oportunidad: {e}")
         raise
 
-def createLead(sf, lead_data: dict) -> str:
+def createLead(sf, lead_data: dict) -> tuple:
+    """
+    Crea un lead en Salesforce.
+    
+    Si se detecta DUPLICATES_DETECTED por la regla Masivo_2_0 (expediente duplicado),
+    extrae el AccountId del error, elimina No_expediente_No_colaborador__c de los datos
+    y reintenta la creación.
+    
+    Returns:
+        tuple: (lead_result: OrderedDict, account_id: str | None)
+        
+        lead_result: resultado de la creación del lead
+        account_id: ID de la cuenta duplicada (si aplica) o None si no hubo duplicado
+    """
     try:
         headers = {'Sforce-Auto-Assign': 'TRUE'}
         sf.headers.update(headers)
         lead = sf.Lead.create(lead_data)
         sf.headers.pop('Sforce-Auto-Assign', None)
         print(f"Lead creado exitosamente: {lead}")
-        return lead
+        return lead, None
     except Exception as e:
-        error = str(e)
+        error_str = str(e)
         print(e)
-        if "DUPLICATES_DETECTED" in error:
-            raise HTTPException(status_code=402, detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés.")
+        if "DUPLICATES_DETECTED" in error_str:
+            account_id = None
+            try:
+                # Extraer el AccountId del error (formato: 'Id': '001WR...')
+                import re
+                match = re.search(r"'Id':\s*'(\w+)'", error_str)
+                if match:
+                    account_id = match.group(1)
+                    print(f"Cuenta duplicada encontrada: {account_id}")
+            except Exception as parse_error:
+                print(f"Error al parsear account_id del error: {parse_error}")
+
+            # Eliminar expediente y reintentar
+            if 'No_expediente_No_colaborador__c' in lead_data:
+                del lead_data['No_expediente_No_colaborador__c']
+                print("Expediente eliminado del lead_data, reintentando...")
+                try:
+                    sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
+                    lead = sf.Lead.create(lead_data)
+                    sf.headers.pop('Sforce-Auto-Assign', None)
+                    print(f"Lead creado exitosamente en reintento: {lead}")
+                    return lead, account_id
+                except Exception as retry_e:
+                    print(f"Error en reintento: {retry_e}")
+                    raise HTTPException(
+                        status_code=402,
+                        detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                    )
+            else:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                )
 
         print(f"Error al crear el lead: {e}")
         raise
@@ -55,12 +99,17 @@ def crear_nota(id_lead, sf, data, request):
         print(f"Error al crear nota {e}")
         return False
 
-def crearTarea(sf, lead_id, owner_id, descripcion):
+def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
     try:
         from app.services.crearCortizacion import fecha_recordatorio
 
         recordatorio = fecha_recordatorio()
         activity_date = recordatorio.split('T')[0]
+
+        # Si hay una cuenta duplicada, agregar enlace al final de la descripción
+        descripcion_final = descripcion
+        if account_id:
+            descripcion_final = f"{descripcion}\n\nCuenta asociada: https://customer-customer-9846.lightning.force.com/lightning/r/Account/{account_id}/view"
 
         task_data = {
             'WhoId': lead_id, 
@@ -70,19 +119,21 @@ def crearTarea(sf, lead_id, owner_id, descripcion):
             'Status': 'Not Started',
             'Priority': 'High',
             'IsReminderSet': True,
-            'Description': descripcion,
+            'Description': descripcion_final,
             'ReminderDateTime': recordatorio
         }
 
+        headers_previos = dict(sf.headers)
+        sf.headers.clear()
         headers = {
-            'Sforce-Auto-Assign': 'FALSE', 
-            'Sforce-Email-Notification': 'TRUE' 
+            'Sforce-Email-Notification': 'TRUE'
         }
         sf.headers.update(headers)
 
         response = sf.Task.create(task_data)
         print("Tarea asignada", response)
-        sf.headers.pop('Sforce-Email-Notification', None)
+        sf.headers.clear()
+        sf.headers.update(headers_previos)
         
         return response
     except Exception as e:

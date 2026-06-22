@@ -76,6 +76,19 @@ def generar_texto(data_cotizacion) -> str:
     lineas = ["<ul>"]
     descripcion = []
 
+    # Agregar nombre y expediente del colaborador siempre al inicio
+    if data_cotizacion.nombre:
+        lineas.insert(1, f"<li><b>Nombre:</b> {data_cotizacion.nombre}</li>")
+        descripcion.append(f"Nombre: {data_cotizacion.nombre}\n")
+
+    if data_cotizacion.expediente_colaborador:
+        lineas.insert(2, f"<li><b>Expediente colaborador:</b> {data_cotizacion.expediente_colaborador}</li>")
+        descripcion.append(f"Expediente colaborador: {data_cotizacion.expediente_colaborador}\n")
+
+    if data_cotizacion.telefono:
+        lineas.insert(3, f"<li><b>Teléfono:</b> {data_cotizacion.telefono}</li>")
+        descripcion.append(f"Teléfono: {data_cotizacion.telefono}\n")
+
     ramos_mapeo = [
         "auto_data", "gmm_data", "hogar_data", "vida_total_data", 
         "vida_mas_data", "plan_seguro_data", "mascota_data", "viajes_data"
@@ -137,7 +150,7 @@ def asignar_propietario_carrusel(sf: Salesforce) -> tuple:
         
         if size == 0:
             print("Omni-Channel vacío. Asignando a director Telemarketing por respaldo.")
-            return '005WR00000CO8C1YAL', 'Pronto se le asignara un asesor'
+            return '005WR00000CO8C1YAL', 'Pronto se le asignara un asesor' #005WR000008PRlCYAW, 005WR00000CO8C1YAL
         
         owners_list.sort(key=lambda x: x['id'])
         print(f"DEBUG: Asesores disponibles y ordenados para el carrusel: {owners_list}")
@@ -180,7 +193,7 @@ def fecha_recordatorio():
     #tiempo_ahora = fecha_prueba.astimezone(zona_local) if fecha_prueba.tzinfo else zona_local.localize(fecha_prueba)
     tiempo_ahora = datetime.now(zona_local)
 
-    recordatorio = tiempo_ahora + timedelta(minutes=5)
+    recordatorio = tiempo_ahora + timedelta(seconds=1)
 
     while recordatorio.weekday() > 4:
         recordatorio = recordatorio + timedelta(days=1)
