@@ -368,3 +368,25 @@ class campos_cotizacion:
         "mascota_data": "MASCOTA",
         "viajes_data": "VIAJES"
     }
+
+
+class negocios_lead_campo:
+    """
+    Catálogo de negocios para el formulario de lead de campo.
+    
+    Cada entrada mapea un código frontend a:
+    - nombre_sf: nombre completo que espera Salesforce en Negocio__c
+    - requiere_expediente: True si Salesforce exige expediente para este negocio
+    
+    Para agregar un nuevo negocio, solo añade una entrada aquí.
+    """
+    MAPEO = {
+        "STRM": {
+            "nombre_sf": "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA",
+            "requiere_expediente": True,
+        },
+        "BIMBO": {
+            "nombre_sf": "GRUPO BIMBO, S.A.B. DE C.V.",
+            "requiere_expediente": False,
+        },
+    }

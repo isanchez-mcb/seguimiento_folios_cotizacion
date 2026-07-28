@@ -73,5 +73,32 @@ class CreateCotizacionRequest(BaseModel):
     mascota_data: Optional[MascotaData] = None
     viajes_data: Optional[ViajesData] = None
 
+class CreateLeadCampoRequest(BaseModel):
+    nombre: str
+    apellido_paterno: str
+    apellido_materno: Optional[str] = None
+    fecha_nacimiento: date
+    genero: str
+    email: str
+    telefono: str
+    empresa: Optional[str] = None
+    seguros: List[str]
+    numero_asesor: str
+
+class CreateLeadCampoResponse(BaseModel):
+    lead_id: str
+    nombre_completo: str
+    asesor_asignado: str
+    asesor_telefono: Optional[str] = None
+    asesor_correo: Optional[str] = None
+
+class AsesorExternoResponse(BaseModel):
+    Name: Optional[str] = None
+    Numero_de_asesor__c: Optional[str] = None
+    Puesto__c: Optional[str] = None
+    Zona__c: Optional[str] = None
+    Correo_electronico__c: Optional[str] = None
+    Numero_telefonico__c: Optional[str] = None
+
 class CreateCotizacionResponse(BaseModel):
     asesor: str

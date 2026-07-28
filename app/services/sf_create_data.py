@@ -76,6 +76,43 @@ def createLead(sf, lead_data: dict) -> tuple:
         print(f"Error al crear el lead: {e}")
         raise
 
+def crear_nota_generica(id_lead: str, sf, html_content: str, titulo: str) -> bool:
+    """
+    Crea una ContentNote en Salesforce y la asocia a un lead.
+    Versión genérica que no depende de modelos de cotización.
+    
+    Args:
+        id_lead: ID del lead al que asociar la nota.
+        sf: Instancia autenticada de Salesforce.
+        html_content: Contenido HTML de la nota (se codifica a base64).
+        titulo: Título de la nota.
+    
+    Returns:
+        True si se creó correctamente, False en caso contrario.
+    """
+    try:
+        import base64
+        data = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+        note_data = {
+            'Title': titulo,
+            'Content': data
+        }
+        nota = sf.ContentNote.create(note_data)
+        nota_id = nota['id']
+
+        link_data = {
+            'ContentDocumentId': nota_id,
+            'LinkedEntityId': id_lead
+        }
+        sf.ContentDocumentLink.create(link_data)
+
+        print(f"Nota '{titulo}' creada exitosamente")
+        return True
+    except Exception as e:
+        print(f"Error al crear nota '{titulo}': {e}")
+        return False
+
+
 def crear_nota(id_lead, sf, data, request):
     try:
         from app.services.crearCortizacion import obtener_nombre_ramo
