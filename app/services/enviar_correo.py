@@ -255,7 +255,7 @@ def notificar_asignacion(
     lead_data: dict,
     ramo: str,
     id_lead: str = "",
-    lider_id: str = "005WR00000CO8C1YAL", #005WR000008PRlCYAW, 005WR00000CO8C1YAL <-Asesor
+    lider_id: str = "005ct00000FwEpxAAF", #005WR000008PRlCYAW, 005WR00000CO8C1YAL <-Asesor, 005ct00000FwEpxAAF <- sb
 ) -> bool:
     """
     Orquesta el envío de correo cuando se asigna un lead a un asesor.
@@ -282,8 +282,8 @@ def notificar_asignacion(
     )
 
     email_asesor = consultar_email_sf(sf, owner_id) if not es_fallback else ""
-    email_lider = consultar_email_sf(sf, lider_id)
-
+    #email_lider = consultar_email_sf(sf, lider_id)
+    email_lider = 'isanchez@mcbrokers.com.mx'
     # Preparar datos para el template
     nombre_prospecto = (
         lead_data.get("FirstName", "")
@@ -335,6 +335,7 @@ def notificar_asignacion(
             telefono=telefono,
             ramo=ramo,
             lead_source=lead_source,
+            url_prospecto=url_prospecto,
             detalle_producto=(
                 "<tr><td colspan='2' style='padding:10px; color:#EE2059; "
                 "font-weight:bold;'>No se encontró un asesor disponible "

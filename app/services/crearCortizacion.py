@@ -150,7 +150,7 @@ def asignar_propietario_carrusel(sf: Salesforce) -> tuple:
         
         if size == 0:
             print("Omni-Channel vacío. Asignando a director Telemarketing por respaldo.")
-            return '005WR00000CO8C1YAL', 'Pronto se le asignara un asesor' #005WR000008PRlCYAW, 005WR00000CO8C1YAL
+            return '005ct00000FwEpxAAF', 'Pronto se le asignara un asesor' #005WR000008PRlCYAW, 005WR00000CO8C1YAL, #005ct00000FwEpxAAF <- SB
         
         owners_list.sort(key=lambda x: x['id'])
         print(f"DEBUG: Asesores disponibles y ordenados para el carrusel: {owners_list}")
