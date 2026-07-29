@@ -73,5 +73,22 @@ class CreateCotizacionRequest(BaseModel):
     mascota_data: Optional[MascotaData] = None
     viajes_data: Optional[ViajesData] = None
 
+class RegistroCampaignRequest(BaseModel):
+    expediente: Optional[str] = None
+    telefono: str
+    correo: str
+    negocio: Optional[str] = None
+    primer_nombre: Optional[str] = None
+    segundo_nombre: Optional[str] = None
+    apellidos: Optional[str] = None
+    ocupacion: Optional[str] = None
+
+class RegistroCampaignResponse(BaseModel):
+    account_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    campaign_member_id: str
+    negocio: str
+
 class CreateCotizacionResponse(BaseModel):
     asesor: str

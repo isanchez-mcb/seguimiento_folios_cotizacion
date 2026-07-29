@@ -54,6 +54,8 @@ def createLead(sf, lead_data: dict) -> tuple:
             # Eliminar expediente y reintentar
             if 'No_expediente_No_colaborador__c' in lead_data:
                 del lead_data['No_expediente_No_colaborador__c']
+                if 'Negocio__c' in lead_data:
+                    del lead_data['Negocio__c']
                 print("Expediente eliminado del lead_data, reintentando...")
                 try:
                     sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
@@ -75,6 +77,48 @@ def createLead(sf, lead_data: dict) -> tuple:
 
         print(f"Error al crear el lead: {e}")
         raise
+
+def crear_nota_generica(id_lead: str, sf, html_content: str, titulo: str) -> bool:
+    """
+    Crea una ContentNote en Salesforce y la asocia a un lead.
+    Versión genérica que no depende de modelos de cotización.
+    
+    Args:
+        id_lead: ID del lead al que asociar la nota.
+        sf: Instancia autenticada de Salesforce.
+        html_content: Contenido HTML de la nota (se codifica a base64).
+        titulo: Título de la nota.
+    
+    Returns:
+        True si se creó correctamente, False en caso contrario.
+    """
+    try:
+        data = base64.b64encode(html_content.encode('utf-8')).decode('utf-8')
+        note_data = {
+            'Title': titulo,
+            'Content': data
+        }
+        nota = sf.ContentNote.create(note_data)
+        nota_id = nota['id']
+        print(f"ContentNote creada: {nota_id}")
+
+        link_data = {
+            'ContentDocumentId': nota_id,
+            'LinkedEntityId': id_lead
+        }
+        link_result = sf.ContentDocumentLink.create(link_data)
+        print(f"ContentDocumentLink creado: {link_result}")
+
+        print(f"Nota '{titulo}' creada exitosamente")
+        return True
+    except Exception as e:
+        print(f"Error al crear nota '{titulo}': {e}")
+        if hasattr(e, 'content'):
+            print(f"Contenido del error: {e.content}")
+        elif hasattr(e, 'message'):
+            print(f"Mensaje del error: {e.message}")
+        return False
+
 
 def crear_nota(id_lead, sf, data, request):
     try:
@@ -98,6 +142,63 @@ def crear_nota(id_lead, sf, data, request):
     except Exception as e:
         print(f"Error al crear nota {e}")
         return False
+
+def obtener_record_type_id(sf, objeto: str, nombre_record_type: str) -> str:
+    """
+    Obtiene el Id de un RecordType de Salesforce por su nombre y objeto.
+    
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        objeto: Nombre del objeto SObject (ej. 'Lead', 'Account', 'Opportunity').
+        nombre_record_type: Nombre del RecordType (ej. 'Masivo', 'Persona física - Nuevos negocios').
+    
+    Returns:
+        Id del RecordType.
+    """
+    try:
+        query = (
+            "SELECT Id FROM RecordType "
+            f"WHERE SObjectType = '{objeto}' AND Name = '{nombre_record_type}'"
+        )
+        result = sf.query(query)
+        if result['totalSize'] == 0:
+            raise HTTPException(
+                status_code=500,
+                detail=f"No se encontró RecordType '{nombre_record_type}' para {objeto}"
+            )
+        return result['records'][0]['Id']
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error al obtener RecordType: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al obtener RecordType '{nombre_record_type}' para {objeto}: {str(e)}"
+        )
+
+
+def createCampaignMember(sf, member_data: dict) -> str:
+    """
+    Crea un registro en CampaignMember (Miembro de Campaña) en Salesforce.
+    
+    Recibe el diccionario completo para máxima flexibilidad.
+    El servicio que lo llama construye los campos específicos.
+    
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        member_data: Dict con los campos del CampaignMember.
+    
+    Returns:
+        ID del CampaignMember creado.
+    """
+    try:
+        result = sf.CampaignMember.create(member_data)
+        print(f"CampaignMember creado exitosamente: {result}")
+        return result['id']
+    except Exception as e:
+        print(f"Error al crear CampaignMember: {e}")
+        raise
+
 
 def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
     try:
