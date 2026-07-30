@@ -117,7 +117,7 @@ def generar_texto(data_cotizacion) -> str:
 
 def buscar_asesor_activo(sf: Salesforce) -> str:
     try:
-        query_cola = "SELECT UserOrGroupId FROM GroupMember Where Group.Name = 'Pruebas Desarrollo'"
+        query_cola = "SELECT UserOrGroupId FROM GroupMember Where Group.Name = 'Asesor Telemarketing'"
         resultado_cola = sf.query(query_cola)
         ids_cola = {rm['UserOrGroupId'] for rm in resultado_cola['records']}
 
