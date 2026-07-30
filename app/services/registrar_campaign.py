@@ -14,6 +14,8 @@ from app.services.sf_create_data import createCampaignMember, createLead, crear_
 CAMPAIGN_ID = "701Hp000001XfwQIAS"
 #CAMPAIGN_ID = "701WR00001KnVoGYAV"
 
+QUEUE_NAME = "Prospectos Telemarketing"
+
 # ─── Helpers ──────────────────────────────────────────────────────
 
 def _es_verdadero(valor) -> bool:
@@ -99,6 +101,33 @@ def _buscar_cuenta_por_expediente(
     return None
 
 
+# ─── Helpers para colas ───────────────────────────────────────────
+
+def _obtener_cola_prospectos(sf: Salesforce) -> Optional[str]:
+    """
+    Obtiene el Id de la cola 'Prospectos Telemarketing' desde Salesforce.
+    Las colas se almacenan en el objeto Group con Type = 'Queue'.
+    
+    Returns:
+        Id de la cola, o None si no se encuentra (se asigna al creador por defecto).
+    """
+    try:
+        query = (
+            "SELECT Id FROM Group "
+            f"WHERE Type = 'Queue' AND Name = '{QUEUE_NAME}'"
+        )
+        result = sf.query(query)
+        if result['totalSize'] == 0:
+            print(f"Cola '{QUEUE_NAME}' no encontrada. Se asignará al creador por defecto.")
+            return None
+        queue_id = result['records'][0]['Id']
+        print(f"Cola '{QUEUE_NAME}' encontrada: {queue_id}")
+        return queue_id
+    except Exception as e:
+        print(f"Error al buscar cola '{QUEUE_NAME}': {e}. Se asignará al creador por defecto.")
+        return None
+
+
 # ─── Escenario 2: Crear Lead (cuenta no existe) ───────────────────
 
 def _crear_lead_campaign(
@@ -131,6 +160,9 @@ def _crear_lead_campaign(
     # Obtener RecordTypeId según el tipo de registro
     record_type_id = obtener_record_type_id(sf, 'Lead', record_type_name)
 
+    # Obtener el Id de la cola para asignar el lead (si no existe, se asigna al creador)
+    queue_id = _obtener_cola_prospectos(sf)
+
     lead_data = {
         'LeadSource': 'Sitio Web',
         'FirstName': request.primer_nombre or '',
@@ -143,6 +175,10 @@ def _crear_lead_campaign(
         'Campana_del__c': CAMPAIGN_ID,
         'RecordTypeId': record_type_id,
     }
+
+    # Solo incluir OwnerId si se encontró la cola
+    if queue_id:
+        lead_data['OwnerId'] = queue_id
 
     # Solo incluir expediente si existe
     if request.expediente and request.expediente.strip():
