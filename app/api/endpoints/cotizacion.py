@@ -18,7 +18,8 @@ security = HTTPBasic()
 def crear_cotizacion(request: CreateCotizacionRequest, sf=Depends(get_salesforce_data), auth_user: str = Depends(verifiy_auth)):
     try:
         lineas, descripcion = generar_texto(request)
-        owner_id, nombre_propietario = asignar_propietario_carrusel(sf)
+        lead_source = request.origen_prospecto if request.origen_prospecto else 'Lucia'
+        owner_id, nombre_propietario = asignar_propietario_carrusel(sf, lead_source)
 
         ramo_activo = obtener_nombre_ramo(request)
         descripcion_con_ramo = f"Cotización: {ramo_activo}\n\n{descripcion}"
