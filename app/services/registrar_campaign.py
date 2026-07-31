@@ -20,15 +20,15 @@ QUEUE_NAME = "Prospectos Telemarketing"
 MAPEO_CORREOS_CUENTA = {
     "wmejorada@mcbrokers.com.mx": {
         "campaign_id": "701WR00001cl3SKYAY",
-        "queue_name": "Toros Telemarketing",
+        "queue_name": "Toros Patrimonial",
     },
     "hrivera@mcbrokers.com.mx": {
         "campaign_id": "701WR00001cp52UYAQ",
-        "queue_name": "Toros SAC",
+        "queue_name": "Toros Telemarketing",
     },
     "dmarquez@mcbrokers.com.mx": {
         "campaign_id": "701WR00001cpUKDYA2",
-        "queue_name": "Toros Patrimonial",
+        "queue_name": "Toros SAC",
     },
 }
 
