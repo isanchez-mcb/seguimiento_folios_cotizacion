@@ -448,6 +448,15 @@ def registrar_en_campaign(
         'Status': 'Registrado',
     }
 
+    # Agregar Asesor_externo_captura__c si se proporcionó numero_asesor
+    if request.numero_asesor and request.numero_asesor.strip():
+        asesor_id = _buscar_id_asesor_externo(sf, request.numero_asesor.strip())
+        if asesor_id:
+            member_data['Asesor_externo_captura__c'] = asesor_id
+            print(f"CampaignMember → Asesor_externo_captura__c = {asesor_id}")
+        else:
+            print(f"CampaignMember → Asesor externo {request.numero_asesor} no encontrado, se omite")
+
     try:
         campaign_member_id = createCampaignMember(sf, member_data)
         print(f"CampaignMember creado: {campaign_member_id}")
