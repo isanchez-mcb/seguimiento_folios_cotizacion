@@ -11,8 +11,8 @@ from app.services.sf_create_data import createCampaignMember, createLead, crear_
 
 # ─── Constantes ───────────────────────────────────────────────────
 
-CAMPAIGN_ID = "701ct000013a5WsAAI" #Sandbox
-#CAMPAIGN_ID = "701WR00001cl3SKYAY" #Produccion
+#CAMPAIGN_ID = "701ct000013a5WsAAI" #Sandbox
+CAMPAIGN_ID = "701WR00001cl3SKYAY" #Produccion
 
 QUEUE_NAME = "Prospectos Telemarketing"
 
