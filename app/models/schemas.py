@@ -77,11 +77,13 @@ class RegistroCampaignRequest(BaseModel):
     expediente: Optional[str] = None
     telefono: str
     correo: Optional[str] = None
+    correo_cuenta: Optional[str] = None
     negocio: Optional[str] = None
     primer_nombre: Optional[str] = None
     segundo_nombre: Optional[str] = None
     apellidos: Optional[str] = None
     ocupacion: Optional[str] = None
+    numero_asesor: Optional[str] = None
 
 class RegistroCampaignResponse(BaseModel):
     account_id: Optional[str] = None

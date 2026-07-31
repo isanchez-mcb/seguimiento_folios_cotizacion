@@ -16,7 +16,39 @@ CAMPAIGN_ID = "701WR00001cl3SKYAY" #Produccion
 
 QUEUE_NAME = "Prospectos Telemarketing"
 
+# Mapeo de correos de cuenta → (campaña, cola) específica
+MAPEO_CORREOS_CUENTA = {
+    "wmejorada@mcbrokers.com.mx": {
+        "campaign_id": "701WR00001cl3SKYAY",
+        "queue_name": "Toros Telemarketing",
+    },
+    "hrivera@mcbrokers.com.mx": {
+        "campaign_id": "701WR00001cp52UYAQ",
+        "queue_name": "Toros SAC",
+    },
+    "dmarquez@mcbrokers.com.mx": {
+        "campaign_id": "701WR00001cpUKDYA2",
+        "queue_name": "Toros Patrimonial",
+    },
+}
+
 # ─── Helpers ──────────────────────────────────────────────────────
+
+def _buscar_id_asesor_externo(sf: Salesforce, numero_asesor: str) -> Optional[str]:
+    """
+    Busca el ID de un asesor externo por su número de asesor.
+    Solo retorna el Id, sin otros campos.
+    """
+    query = (
+        "SELECT Id FROM Asesor_externo__c "
+        f"WHERE Numero_de_asesor__c = {numero_asesor} "
+        "ORDER BY CreatedDate DESC LIMIT 1"
+    )
+    result = sf.query(query)
+    if result['totalSize'] > 0:
+        return result['records'][0]['Id']
+    return None
+
 
 def _es_verdadero(valor) -> bool:
     """Retorna True si el valor de Salesforce se considera verdadero."""
@@ -103,10 +135,14 @@ def _buscar_cuenta_por_expediente(
 
 # ─── Helpers para colas ───────────────────────────────────────────
 
-def _obtener_cola_prospectos(sf: Salesforce) -> Optional[str]:
+def _obtener_cola_prospectos(sf: Salesforce, queue_name: str = QUEUE_NAME) -> Optional[str]:
     """
-    Obtiene el Id de la cola 'Prospectos Telemarketing' desde Salesforce.
+    Obtiene el Id de una cola desde Salesforce por su nombre.
     Las colas se almacenan en el objeto Group con Type = 'Queue'.
+    
+    Args:
+        sf: Instancia de Salesforce.
+        queue_name: Nombre de la cola.
     
     Returns:
         Id de la cola, o None si no se encuentra (se asigna al creador por defecto).
@@ -114,17 +150,17 @@ def _obtener_cola_prospectos(sf: Salesforce) -> Optional[str]:
     try:
         query = (
             "SELECT Id FROM Group "
-            f"WHERE Type = 'Queue' AND Name = '{QUEUE_NAME}'"
+            f"WHERE Type = 'Queue' AND Name = '{queue_name}'"
         )
         result = sf.query(query)
         if result['totalSize'] == 0:
-            print(f"Cola '{QUEUE_NAME}' no encontrada. Se asignará al creador por defecto.")
+            print(f"Cola '{queue_name}' no encontrada. Se asignará al creador por defecto.")
             return None
         queue_id = result['records'][0]['Id']
-        print(f"Cola '{QUEUE_NAME}' encontrada: {queue_id}")
+        print(f"Cola '{queue_name}' encontrada: {queue_id}")
         return queue_id
     except Exception as e:
-        print(f"Error al buscar cola '{QUEUE_NAME}': {e}. Se asignará al creador por defecto.")
+        print(f"Error al buscar cola '{queue_name}': {e}. Se asignará al creador por defecto.")
         return None
 
 
@@ -160,8 +196,19 @@ def _crear_lead_campaign(
     # Obtener RecordTypeId según el tipo de registro
     record_type_id = obtener_record_type_id(sf, 'Lead', record_type_name)
 
+    # Resolver campaña y cola según el correo de la cuenta
+    campaign_id = CAMPAIGN_ID
+    queue_name = QUEUE_NAME
+
+    if request.correo_cuenta and request.correo_cuenta.strip():
+        config_cuenta = MAPEO_CORREOS_CUENTA.get(request.correo_cuenta.strip().lower())
+        if config_cuenta:
+            campaign_id = config_cuenta["campaign_id"]
+            queue_name = config_cuenta["queue_name"]
+            print(f"Correo de cuenta '{request.correo_cuenta}' → campaña {campaign_id}, cola {queue_name}")
+
     # Obtener el Id de la cola para asignar el lead (si no existe, se asigna al creador)
-    queue_id = _obtener_cola_prospectos(sf)
+    queue_id = _obtener_cola_prospectos(sf, queue_name)
 
     lead_data = {
         'LeadSource': 'Sitio Web',
@@ -172,13 +219,22 @@ def _crear_lead_campaign(
         'MobilePhone': telefono_normalizado,
         'Negocio__c': negocio,
         'Estado_de_la_republica__c': 'Ciudad de México',
-        'Campana_del__c': CAMPAIGN_ID,
+        'Campana_del__c': campaign_id,
         'RecordTypeId': record_type_id,
     }
 
     # Solo incluir OwnerId si se encontró la cola
     if queue_id:
         lead_data['OwnerId'] = queue_id
+
+    # Buscar asesor externo si se proporcionó el número
+    if request.numero_asesor and request.numero_asesor.strip():
+        asesor_id = _buscar_id_asesor_externo(sf, request.numero_asesor.strip())
+        if asesor_id:
+            lead_data['Asesor_externo__c'] = asesor_id
+            print(f"Asesor externo encontrado: ID {asesor_id}")
+        else:
+            print(f"Asesor externo {request.numero_asesor} no encontrado. Se dejará vacío.")
 
     # Solo incluir expediente si existe
     if request.expediente and request.expediente.strip():
@@ -378,9 +434,17 @@ def registrar_en_campaign(
     print(f"Contacto encontrado: {contact_id} - {contact.get('Name', '')}")
 
     # ── 6. Crear CampaignMember ──────────────────────────────────
+    # Resolver campaña según el correo de la cuenta
+    campaign_id_member = CAMPAIGN_ID
+    if request.correo_cuenta and request.correo_cuenta.strip():
+        config_cuenta = MAPEO_CORREOS_CUENTA.get(request.correo_cuenta.strip().lower())
+        if config_cuenta:
+            campaign_id_member = config_cuenta["campaign_id"]
+            print(f"CampaignMember → campaña {campaign_id_member} según correo de cuenta")
+
     member_data = {
         'ContactId': contact_id,
-        'CampaignId': CAMPAIGN_ID,
+        'CampaignId': campaign_id_member,
         'Status': 'Registrado',
     }
 
