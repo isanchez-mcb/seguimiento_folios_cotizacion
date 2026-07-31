@@ -11,8 +11,8 @@ from app.services.sf_create_data import createCampaignMember, createLead, crear_
 
 # ─── Constantes ───────────────────────────────────────────────────
 
-CAMPAIGN_ID = "701Hp000001XfwQIAS"
-#CAMPAIGN_ID = "701WR00001KnVoGYAV"
+CAMPAIGN_ID = "701ct000013a5WsAAI" #Sandbox
+#CAMPAIGN_ID = "701WR00001cl3SKYAY" #Produccion
 
 QUEUE_NAME = "Prospectos Telemarketing"
 
@@ -328,12 +328,31 @@ def registrar_en_campaign(
                 sf.Account.update(account_id, update_data)
                 campos_actualizados = ", ".join(update_data.keys())
                 print(f"Cuenta {account_id} actualizada en reintento: {campos_actualizados}")
+
             except Exception as retry_e:
-                print(f"Error en reintento de actualización: {retry_e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Error al actualizar la cuenta incluso después de corregir expediente y negocio: {str(retry_e)}"
-                )
+                retry_error_str = str(retry_e)
+                print(f"Error en reintento de actualización: {retry_error_str}")
+
+                # Si en el reintento también salta duplicado de email, quitarlo y reintentar
+                if "DUPLICATES_DETECTED" in retry_error_str and "Email" in retry_error_str:
+                    print("Duplicado de PersonEmail en reintento. Eliminando PersonEmail y reintentando...")
+                    update_data.pop('PersonEmail', None)
+
+                    try:
+                        sf.Account.update(account_id, update_data)
+                        campos_actualizados = ", ".join(update_data.keys())
+                        print(f"Cuenta {account_id} actualizada en segundo reintento: {campos_actualizados}")
+                    except Exception as retry2_e:
+                        print(f"Error en segundo reintento: {retry2_e}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Error al actualizar la cuenta incluso después de corregir expediente y email: {str(retry2_e)}"
+                        )
+                else:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Error al actualizar la cuenta incluso después de corregir expediente y negocio: {str(retry_error_str)}"
+                    )
         else:
             raise HTTPException(
                 status_code=500,

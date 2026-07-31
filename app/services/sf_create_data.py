@@ -64,16 +64,49 @@ def createLead(sf, lead_data: dict) -> tuple:
                     print(f"Lead creado exitosamente en reintento: {lead}")
                     return lead, account_id
                 except Exception as retry_e:
-                    print(f"Error en reintento: {retry_e}")
+                    retry_error_str = str(retry_e)
+                    print(f"Error en reintento: {retry_error_str}")
+
+                    # Si el reintento sigue fallando por DUPLICATES_DETECTED (email),
+                    # eliminar el Email y reintentar una vez más
+                    if "DUPLICATES_DETECTED" in retry_error_str and 'Email' in lead_data:
+                        del lead_data['Email']
+                        print("Email eliminado del lead_data por duplicado, reintentando...")
+                        try:
+                            sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
+                            lead = sf.Lead.create(lead_data)
+                            sf.headers.pop('Sforce-Auto-Assign', None)
+                            print(f"Lead creado exitosamente en segundo reintento: {lead}")
+                            return lead, account_id
+                        except Exception as retry2_e:
+                            print(f"Error en segundo reintento: {retry2_e}")
+                            raise HTTPException(
+                                status_code=402,
+                                detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                            )
+            else:
+                # Si no hay expediente pero el duplicado es por email,
+                # eliminar el Email y reintentar
+                if 'Email' in lead_data:
+                    del lead_data['Email']
+                    print("Email eliminado del lead_data por duplicado (sin expediente), reintentando...")
+                    try:
+                        sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
+                        lead = sf.Lead.create(lead_data)
+                        sf.headers.pop('Sforce-Auto-Assign', None)
+                        print(f"Lead creado exitosamente en reintento sin email: {lead}")
+                        return lead, account_id
+                    except Exception as retry_e:
+                        print(f"Error en reintento sin email: {retry_e}")
+                        raise HTTPException(
+                            status_code=402,
+                            detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                        )
+                else:
                     raise HTTPException(
                         status_code=402,
                         detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
                     )
-            else:
-                raise HTTPException(
-                    status_code=402,
-                    detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
-                )
 
         print(f"Error al crear el lead: {e}")
         raise
