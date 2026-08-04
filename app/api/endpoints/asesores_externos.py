@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from app.models.schemas import AsesorExternoResponse, CreateLeadCampoRequest, CreateLeadCampoResponse
 from app.dependencias.sf_service import get_salesforce_data
-from app.services.buscarAsesorExterno import buscar_asesor_externo
+from app.services.buscarAsesorExterno import buscar_asesor_externo, verificar_cuenta_usuario
 from app.services.crearLeadCampo import crear_lead_campo
 from app.dependencias.security import verifiy_auth
 
@@ -28,6 +28,17 @@ def buscar_asesor_externo_endpoint(
         raise HTTPException(
             status_code=404,
             detail=f"No se encontró asesor externo con número: {numero_asesor}"
+        )
+
+    # ── Corroborar si el asesor tiene una cuenta de usuario activa en Salesforce ──
+    user_id = verificar_cuenta_usuario(numero_asesor.strip(), sf)
+    if user_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"El asesor con número {numero_asesor} no tiene una cuenta "
+                "de usuario activa en Salesforce. Favor de verificar con el administrador."
+            )
         )
 
     print("Asesor externo encontrado")

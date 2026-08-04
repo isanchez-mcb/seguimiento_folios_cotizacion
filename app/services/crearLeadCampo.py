@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from simple_salesforce import Salesforce
 
 from app.models.schemas import CreateLeadCampoRequest
-from app.services.buscarAsesorExterno import buscar_asesor_externo
+from app.services.buscarAsesorExterno import buscar_asesor_externo, verificar_cuenta_usuario
 from app.services.sf_create_data import createLead, crear_nota_generica
 from app.utils.diccionarios import negocios_lead_campo
 
@@ -143,7 +143,18 @@ def crear_lead_campo(
             status_code=404,
             detail=f"No se encontró asesor externo con número: {request.numero_asesor}"
         )
-    owner_id = asesor_data['Id']
+
+    # Si el asesor tiene cuenta de usuario activa → el User es el owner del lead.
+    # Si no → se asigna al owner de respaldo.
+    OWNER_RESPALDO = '005WR000000OCCAYA4'
+    user_id = verificar_cuenta_usuario(request.numero_asesor, sf)
+    if user_id:
+        owner_id = user_id
+        print(f"Asesor {request.numero_asesor} tiene cuenta de usuario → owner asignado: {owner_id}")
+    else:
+        owner_id = OWNER_RESPALDO
+        print(f"Asesor {request.numero_asesor} NO tiene cuenta de usuario → owner de respaldo: {owner_id}")
+
     nombre_asesor = asesor_data.get('Name', 'Desconocido')
     asesor_telefono = asesor_data.get('Numero_telefonico__c')
     asesor_correo = asesor_data.get('Correo_electronico__c')
@@ -163,7 +174,8 @@ def crear_lead_campo(
         'MobilePhone': request.telefono,
         'Fecha_de_nacimiento__c': str(request.fecha_nacimiento),
         'Genero__c': request.genero,
-        'Asesor_externo__c': owner_id,
+        'Asesor_externo__c': asesor_data['Id'],
+        'OwnerId': owner_id,
         'RecordTypeId': record_type_id
     }
 

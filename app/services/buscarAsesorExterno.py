@@ -2,6 +2,32 @@ from simple_salesforce import Salesforce
 from typing import Optional, Dict, Any
 
 
+def verificar_cuenta_usuario(numero_asesor: str, sf: Salesforce) -> Optional[str]:
+    """
+    Corrobora si el asesor tiene una cuenta de usuario (User) activa en Salesforce.
+    
+    Args:
+        numero_asesor: Número de asesor (corresponde al campo Alias del User).
+        sf: Instancia autenticada de Salesforce.
+    
+    Returns:
+        El Id del User si existe un usuario activo con ese Alias, o None si no.
+    """
+    try:
+        query = (
+            "SELECT Id, Name, Alias, IsActive, Email "
+            "FROM User "
+            f"WHERE IsActive = True AND Alias = '{numero_asesor}'"
+        )
+        result = sf.query(query)
+        if result['totalSize'] > 0:
+            return result['records'][0]['Id']
+        return None
+    except Exception as e:
+        print(f"Error al verificar cuenta de usuario para asesor {numero_asesor}: {e}")
+        return None
+
+
 def _normalizar_valor(valor) -> Optional[str]:
     """Convierte cualquier valor Salesforce a string o None."""
     if valor is None:
