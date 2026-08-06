@@ -16,13 +16,14 @@ CAMPAÑA_ZUMPANGO_PATRIMONIAL = "701WR00001cjxlaYAA"     # Sandbox
 
 COLA_ZUMPANGO_TELEMARKETING = "Zumpango Telemarketing"
 COLA_ZUMPANGO_PATRIMONIAL = "Zumpango Patrimonial"
-#COLA_ASESOR_TELEMARKETING = "Asesor_Telemarketing"
-COLA_ASESOR_TELEMARKETING = "Pruebas Desarrollo"
+COLA_ASESOR_TELEMARKETING = "Asesor Telemarketing"
+#COLA_ASESOR_TELEMARKETING = "Pruebas Desarrollo"
 
 
 
 #OWNER_TAREA_RESPALDO = '005ct00000BdIOYAA3' #Sandbox
-OWNER_TAREA_RESPALDO = '005WR000008PRlCYAW' #Prod
+#OWNER_TAREA_RESPALDO = '005WR000008PRlCYAW' #Prod
+OWNER_TAREA_RESPALDO = '005WR00000CO8C1YAL' #Prod
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
