@@ -75,9 +75,8 @@ class CreateCotizacionRequest(BaseModel):
 
 class RegistroCampaignRequest(BaseModel):
     expediente: Optional[str] = None
-    telefono: str
+    telefono: Optional[str] = None
     correo: Optional[str] = None
-    correo_cuenta: Optional[str] = None
     negocio: Optional[str] = None
     primer_nombre: Optional[str] = None
     segundo_nombre: Optional[str] = None

@@ -5,50 +5,29 @@ from fastapi import HTTPException
 from simple_salesforce import Salesforce
 
 from app.models.schemas import RegistroCampaignRequest
+from app.services.asesor_campana import (
+    CAMPAÑA_ZUMPANGO_TELEMARKETING,
+    CAMPAÑA_ZUMPANGO_PATRIMONIAL,
+    COLA_ZUMPANGO_TELEMARKETING,
+    COLA_ZUMPANGO_PATRIMONIAL,
+    OWNER_TAREA_RESPALDO,
+    resolver_campana_y_cola,
+)
 from app.services.crearCortizacion import normalizar_telefono
-from app.services.sf_create_data import createCampaignMember, createLead, crear_nota_generica, obtener_record_type_id
+from app.services.sf_create_data import createCampaignMember, createLead, crear_nota_generica, crear_tarea_campana, obtener_record_type_id
 
 
-# ─── Constantes ───────────────────────────────────────────────────
+# ─── Constantes de validación de empresa por tamaño ───────────────
 
-#CAMPAIGN_ID = "701ct000013a5WsAAI" #Sandbox
-CAMPAIGN_ID = "701WR00001cl3SKYAY" #Produccion
-
-QUEUE_NAME = "Prospectos Telemarketing"
-
-# Mapeo de correos de cuenta → (campaña, cola) específica
-MAPEO_CORREOS_CUENTA = {
-    "wmejorada@mcbrokers.com.mx": {
-        "campaign_id": "701WR00001cl3SKYAY",
-        "queue_name": "Toros Patrimonial",
-    },
-    "hrivera@mcbrokers.com.mx": {
-        "campaign_id": "701WR00001cp52UYAQ",
-        "queue_name": "Toros Telemarketing",
-    },
-    "dmarquez@mcbrokers.com.mx": {
-        "campaign_id": "701WR00001cpUKDYA2",
-        "queue_name": "Toros SAC",
-    },
+MAPEO_EMPRESA_POR_TAMANO = {
+    5: "CAJA DE AHORRO DE LOS TELEFONISTAS, S.C DE A.P. DE R.L. DE C.V.",
+    6: "EMPLEADOS DEL STRM",
+    7: "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA",
+    8: "COMPAÑÍA DE TELÉFONOS Y BIENES RAÍCES, S.A. DE C.V",
 }
 
+
 # ─── Helpers ──────────────────────────────────────────────────────
-
-def _buscar_id_asesor_externo(sf: Salesforce, numero_asesor: str) -> Optional[str]:
-    """
-    Busca el ID de un asesor externo por su número de asesor.
-    Solo retorna el Id, sin otros campos.
-    """
-    query = (
-        "SELECT Id FROM Asesor_externo__c "
-        f"WHERE Numero_de_asesor__c = {numero_asesor} "
-        "ORDER BY CreatedDate DESC LIMIT 1"
-    )
-    result = sf.query(query)
-    if result['totalSize'] > 0:
-        return result['records'][0]['Id']
-    return None
-
 
 def _es_verdadero(valor) -> bool:
     """Retorna True si el valor de Salesforce se considera verdadero."""
@@ -133,35 +112,38 @@ def _buscar_cuenta_por_expediente(
     return None
 
 
-# ─── Helpers para colas ───────────────────────────────────────────
-
-def _obtener_cola_prospectos(sf: Salesforce, queue_name: str = QUEUE_NAME) -> Optional[str]:
+def _resolver_empresa_por_tamano(expediente: str) -> Optional[str]:
     """
-    Obtiene el Id de una cola desde Salesforce por su nombre.
-    Las colas se almacenan en el objeto Group con Type = 'Queue'.
+    Resuelve la empresa según el tamaño del expediente.
     
-    Args:
-        sf: Instancia de Salesforce.
-        queue_name: Nombre de la cola.
+    Si el expediente es más corto que el tamaño deseado, se rellena
+    con ceros a la izquierda hasta alcanzar el tamaño.
     
-    Returns:
-        Id de la cola, o None si no se encuentra (se asigna al creador por defecto).
+    Mapeo:
+    - 5 → CAJA DE AHORRO DE LOS TELEFONISTAS, S.C DE A.P. DE R.L. DE C.V.
+    - 6 → EMPLEADOS DEL STRM
+    - 7 → SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA
+    - 8 → COMPAÑÍA DE TELÉFONOS Y BIENES RAÍCES, S.A. DE C.V
     """
-    try:
-        query = (
-            "SELECT Id FROM Group "
-            f"WHERE Type = 'Queue' AND Name = '{queue_name}'"
-        )
-        result = sf.query(query)
-        if result['totalSize'] == 0:
-            print(f"Cola '{queue_name}' no encontrada. Se asignará al creador por defecto.")
-            return None
-        queue_id = result['records'][0]['Id']
-        print(f"Cola '{queue_name}' encontrada: {queue_id}")
-        return queue_id
-    except Exception as e:
-        print(f"Error al buscar cola '{queue_name}': {e}. Se asignará al creador por defecto.")
+    if not expediente:
         return None
+
+    expediente_limpio = expediente.strip()
+    tamano = len(expediente_limpio)
+
+    # Si el tamaño coincide exactamente con un mapeo
+    if tamano in MAPEO_EMPRESA_POR_TAMANO:
+        return MAPEO_EMPRESA_POR_TAMANO[tamano]
+
+    # Si es más corto que el tamaño mínimo, rellenar con ceros a la izquierda
+    # hasta alcanzar el tamaño deseado más cercano
+    tamano_minimo = min(MAPEO_EMPRESA_POR_TAMANO.keys())
+    if tamano < tamano_minimo:
+        # Rellenar con ceros a la izquierda hasta el tamaño mínimo
+        expediente_rellenado = expediente_limpio.zfill(tamano_minimo)
+        return MAPEO_EMPRESA_POR_TAMANO[tamano_minimo]
+
+    return None
 
 
 # ─── Escenario 2: Crear Lead (cuenta no existe) ───────────────────
@@ -196,19 +178,11 @@ def _crear_lead_campaign(
     # Obtener RecordTypeId según el tipo de registro
     record_type_id = obtener_record_type_id(sf, 'Lead', record_type_name)
 
-    # Resolver campaña y cola según el correo de la cuenta
-    campaign_id = CAMPAIGN_ID
-    queue_name = QUEUE_NAME
-
-    if request.correo_cuenta and request.correo_cuenta.strip():
-        config_cuenta = MAPEO_CORREOS_CUENTA.get(request.correo_cuenta.strip().lower())
-        if config_cuenta:
-            campaign_id = config_cuenta["campaign_id"]
-            queue_name = config_cuenta["queue_name"]
-            print(f"Correo de cuenta '{request.correo_cuenta}' → campaña {campaign_id}, cola {queue_name}")
-
-    # Obtener el Id de la cola para asignar el lead (si no existe, se asigna al creador)
-    queue_id = _obtener_cola_prospectos(sf, queue_name)
+    # ── Resolver campaña, cola, owner y asesor según la lógica ──
+    tiene_expediente = bool(request.expediente and request.expediente.strip())
+    campaign_id, owner_id, asesor_externo_id, nombre_asesor, crear_tarea = resolver_campana_y_cola(
+        request.numero_asesor, tiene_expediente, sf
+    )
 
     lead_data = {
         'LeadSource': 'Sitio Web',
@@ -223,24 +197,46 @@ def _crear_lead_campaign(
         'RecordTypeId': record_type_id,
     }
 
-    # Solo incluir OwnerId si se encontró la cola
-    if queue_id:
-        lead_data['OwnerId'] = queue_id
+    # Solo incluir OwnerId si se resolvió (cola o user)
+    if owner_id:
+        lead_data['OwnerId'] = owner_id
 
-    # Buscar asesor externo si se proporcionó el número
-    if request.numero_asesor and request.numero_asesor.strip():
-        asesor_id = _buscar_id_asesor_externo(sf, request.numero_asesor.strip())
-        if asesor_id:
-            lead_data['Asesor_externo__c'] = asesor_id
-            print(f"Asesor externo encontrado: ID {asesor_id}")
-        else:
-            print(f"Asesor externo {request.numero_asesor} no encontrado. Se dejará vacío.")
+    # Asignar asesor externo si se encontró
+    if asesor_externo_id:
+        lead_data['Asesor_externo__c'] = asesor_externo_id
+        print(f"Asesor externo asignado al lead: {asesor_externo_id}")
 
     # Solo incluir expediente si existe
     if request.expediente and request.expediente.strip():
         lead_data['No_expediente_No_colaborador__c'] = request.expediente
 
-    lead_result, _ = createLead(sf, lead_data)
+    # ── 5. Crear Lead con manejo de validación de empresa ────────
+    try:
+        lead_result, _ = createLead(sf, lead_data)
+    except Exception as e:
+        error_str = str(e)
+        # Si la validación de empresa/expediente falla, resolver empresa por tamaño
+        if "FIELD_CUSTOM_VALIDATION_EXCEPTION" in error_str and "No_expediente_No_colaborador__c" in error_str:
+            print("Validación de empresa falló en lead. Resolviendo empresa por tamaño del expediente...")
+
+            empresa_por_tamano = _resolver_empresa_por_tamano(request.expediente)
+            if empresa_por_tamano:
+                lead_data['Negocio__c'] = empresa_por_tamano
+
+                # Rellenar expediente con ceros a la izquierda si es más corto que el mínimo
+                expediente_limpio = request.expediente.strip()
+                tamano = len(expediente_limpio)
+                if tamano < 5:
+                    lead_data['No_expediente_No_colaborador__c'] = expediente_limpio.zfill(5)
+                    print(f"Expediente rellenado con ceros: {lead_data['No_expediente_No_colaborador__c']}")
+
+                print(f"Empresa resuelta por tamaño para lead: {empresa_por_tamano}")
+                lead_result, _ = createLead(sf, lead_data)
+            else:
+                raise
+        else:
+            raise
+
     lead_id = lead_result['id']
     print(f"Lead creado para campaña: {lead_id} (RecordType: {record_type_name})")
 
@@ -253,6 +249,31 @@ def _crear_lead_campaign(
             print(f"Nota de ocupación creada para lead {lead_id}")
         else:
             print(f"ERROR: No se pudo crear la nota de ocupación para lead {lead_id}")
+
+    # ── Crear tarea si aplica (prospecto) ────────────────────────
+    if crear_tarea:
+        # Determinar owner de la tarea:
+        # - Caso 1/3: owner_id es User (005...) → el User del asesor
+        # - Caso 2: owner_id es cola Zumpango Telemarketing → la cola
+        # - Caso 4: sin asesor → owner respaldo
+        if owner_id and owner_id.startswith('005'):
+            owner_tarea = owner_id
+        elif asesor_externo_id:
+            owner_tarea = owner_id
+        else:
+            owner_tarea = OWNER_TAREA_RESPALDO
+
+        descripcion_tarea = (
+            f"Registro en campaña desde landing page.\n"
+            f"Lead: {lead_id}"
+        )
+        tarea_creada = crear_tarea_campana(
+            sf, lead_id, campaign_id, owner_tarea, descripcion_tarea
+        )
+        if tarea_creada:
+            print(f"Tarea de campaña creada para lead {lead_id}")
+        else:
+            print(f"ERROR: No se pudo crear la tarea de campaña para lead {lead_id}")
 
     # El CampaignMember se crea automáticamente al asignar CampaignId en el Lead
     # Retornamos el lead_id como identificador
@@ -280,7 +301,7 @@ def registrar_en_campaign(
         Tuple (account_id, contact_id, lead_id, campaign_member_id, negocio)
     """
     # ── 1. Normalizar teléfono ───────────────────────────────────
-    telefono_normalizado = normalizar_telefono(request.telefono)
+    telefono_normalizado = normalizar_telefono(request.telefono) if request.telefono else ""
 
     # ── 2. Detectar si viene sin expediente ──────────────────────
     if not request.expediente or not request.expediente.strip():
@@ -306,8 +327,11 @@ def registrar_en_campaign(
     # ── 3. Construir update_data condicional ─────────────────────
     update_data = {
         'Email_landing_page__c': request.correo,
-        'Phone': telefono_normalizado,
     }
+
+    # Phone: solo si se proporcionó teléfono
+    if telefono_normalizado:
+        update_data['Phone'] = telefono_normalizado
 
     # PersonEmail: solo si está vacío
     person_email_actual = account.get('PersonEmail')
@@ -315,9 +339,9 @@ def registrar_en_campaign(
         update_data['PersonEmail'] = request.correo
         print("PersonEmail vacío → se rellena con el correo del usuario")
 
-    # PersonMobilePhone: solo si está vacío
+    # PersonMobilePhone: solo si está vacío y hay teléfono
     person_phone_actual = account.get('PersonMobilePhone')
-    if not person_phone_actual:
+    if not person_phone_actual and telefono_normalizado:
         update_data['PersonMobilePhone'] = telefono_normalizado
         print("PersonMobilePhone vacío → se rellena con el teléfono del usuario")
 
@@ -344,10 +368,6 @@ def registrar_en_campaign(
         print(f"Error al actualizar cuenta {account_id}: {error_str}")
 
         # ── 4a. Reintento si es duplicado de PersonEmail ─────────
-        # Si el correo ya está registrado en otra cuenta, Salesforce
-        # dispara DUPLICATES_DETECTED. En ese caso, eliminamos PersonEmail
-        # del update_data (lo dejamos vacío como estaba) y reintentamos.
-        # Email_landing_page__c y Phone se actualizan igual.
         if "DUPLICATES_DETECTED" in error_str and "Email" in error_str:
             print("Duplicado de PersonEmail detectado. "
                   "Eliminando PersonEmail del update_data y reintentando...")
@@ -370,9 +390,7 @@ def registrar_en_campaign(
             print("Regla de validación de expediente detectada. "
                   "Reintentando con Negocio__c y No_expediente_No_colaborador__c del formulario...")
 
-            # Forzar Negocio__c y No_expediente con los valores limpios del formulario
-            # para que las reglas de validación (RV_03, RV_04, RV_05, RV_09, RV_10)
-            # coincidan con la longitud correcta del expediente
+            # Intento 1: forzar Negocio__c y No_expediente con los valores del formulario
             update_data['No_expediente_No_colaborador__c'] = request.expediente
             update_data['Negocio__c'] = request.negocio
 
@@ -389,7 +407,7 @@ def registrar_en_campaign(
                 retry_error_str = str(retry_e)
                 print(f"Error en reintento de actualización: {retry_error_str}")
 
-                # Si en el reintento también salta duplicado de email, quitarlo y reintentar
+                # ── 4b-1. Reintento por duplicado de email ───────
                 if "DUPLICATES_DETECTED" in retry_error_str and "Email" in retry_error_str:
                     print("Duplicado de PersonEmail en reintento. Eliminando PersonEmail y reintentando...")
                     update_data.pop('PersonEmail', None)
@@ -403,6 +421,32 @@ def registrar_en_campaign(
                         raise HTTPException(
                             status_code=500,
                             detail=f"Error al actualizar la cuenta incluso después de corregir expediente y email: {str(retry2_e)}"
+                        )
+
+                # ── 4b-2. Último intento: resolver empresa por tamaño ──
+                elif "FIELD_CUSTOM_VALIDATION_EXCEPTION" in retry_error_str and "No_expediente_No_colaborador__c" in retry_error_str:
+                    print("Validación de empresa falló de nuevo. "
+                          "Resolviendo empresa por tamaño del expediente...")
+
+                    empresa_por_tamano = _resolver_empresa_por_tamano(request.expediente)
+                    if empresa_por_tamano:
+                        update_data['Negocio__c'] = empresa_por_tamano
+                        print(f"Empresa resuelta por tamaño: {empresa_por_tamano}")
+
+                        try:
+                            sf.Account.update(account_id, update_data)
+                            campos_actualizados = ", ".join(update_data.keys())
+                            print(f"Cuenta {account_id} actualizada en último intento: {campos_actualizados}")
+                        except Exception as retry3_e:
+                            print(f"Error en último intento: {retry3_e}")
+                            raise HTTPException(
+                                status_code=500,
+                                detail=f"Error al actualizar la cuenta incluso después de resolver empresa por tamaño: {str(retry3_e)}"
+                            )
+                    else:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"No se pudo resolver la empresa por tamaño del expediente: {request.expediente}"
                         )
                 else:
                     raise HTTPException(
@@ -433,14 +477,11 @@ def registrar_en_campaign(
     contact_id = contact['Id']
     print(f"Contacto encontrado: {contact_id} - {contact.get('Name', '')}")
 
-    # ── 6. Crear CampaignMember ──────────────────────────────────
-    # Resolver campaña según el correo de la cuenta
-    campaign_id_member = CAMPAIGN_ID
-    if request.correo_cuenta and request.correo_cuenta.strip():
-        config_cuenta = MAPEO_CORREOS_CUENTA.get(request.correo_cuenta.strip().lower())
-        if config_cuenta:
-            campaign_id_member = config_cuenta["campaign_id"]
-            print(f"CampaignMember → campaña {campaign_id_member} según correo de cuenta")
+    # ── 6. Resolver campaña, cola, owner y asesor ────────────────
+    tiene_expediente = bool(request.expediente and request.expediente.strip())
+    campaign_id_member, owner_id, asesor_externo_id, nombre_asesor, crear_tarea = resolver_campana_y_cola(
+        request.numero_asesor, tiene_expediente, sf
+    )
 
     member_data = {
         'ContactId': contact_id,
@@ -448,14 +489,10 @@ def registrar_en_campaign(
         'Status': 'Registrado',
     }
 
-    # Agregar Asesor_externo_captura__c si se proporcionó numero_asesor
-    if request.numero_asesor and request.numero_asesor.strip():
-        asesor_id = _buscar_id_asesor_externo(sf, request.numero_asesor.strip())
-        if asesor_id:
-            member_data['Asesor_externo_captura__c'] = asesor_id
-            print(f"CampaignMember → Asesor_externo_captura__c = {asesor_id}")
-        else:
-            print(f"CampaignMember → Asesor externo {request.numero_asesor} no encontrado, se omite")
+    # Agregar Asesor_externo_captura__c si se encontró asesor externo
+    if asesor_externo_id:
+        member_data['Asesor_externo_captura__c'] = asesor_externo_id
+        print(f"CampaignMember → Asesor_externo_captura__c = {asesor_externo_id}")
 
     try:
         campaign_member_id = createCampaignMember(sf, member_data)
@@ -474,6 +511,32 @@ def registrar_en_campaign(
                 status_code=500,
                 detail=f"Error al crear el miembro de campaña: {str(e)}"
             )
+
+    # ── 7. Crear tarea si aplica (solo si CampaignMember es nuevo) ──
+    if campaign_member_id != "EXISTENTE" and crear_tarea:
+        # Determinar owner de la tarea:
+        # - Caso 1/3: owner_id es User (005...) → el User del asesor
+        # - Caso 2: owner_id es cola Zumpango Telemarketing → la cola
+        # - Caso 4: sin asesor → owner respaldo
+        if owner_id and owner_id.startswith('005'):
+            owner_tarea = owner_id
+        elif asesor_externo_id:
+            owner_tarea = owner_id
+        else:
+            owner_tarea = OWNER_TAREA_RESPALDO
+
+        descripcion_tarea = (
+            f"Registro en campaña desde landing page.\n"
+            f"Contacto: {contact_id}\n"
+            f"Cuenta: {account_id}"
+        )
+        tarea_creada = crear_tarea_campana(
+            sf, contact_id, campaign_id_member, owner_tarea, descripcion_tarea
+        )
+        if tarea_creada:
+            print(f"Tarea de campaña creada para contacto {contact_id}")
+        else:
+            print(f"ERROR: No se pudo crear la tarea de campaña para contacto {contact_id}")
 
     print(
         f"Registro en campaña completado: "

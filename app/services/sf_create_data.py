@@ -233,6 +233,79 @@ def createCampaignMember(sf, member_data: dict) -> str:
         raise
 
 
+def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descripcion: str) -> bool:
+    """
+    Crea una tarea en Salesforce asociada a un prospecto/contacto (WhoId) y una campaña (WhatId).
+    
+    Nota: Salesforce NO permite WhatId (campaña) cuando WhoId es un Lead.
+    En ese caso, la campaña se incluye en la descripción.
+    
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        who_id: ID del prospecto (Lead) o contacto (WhoId).
+        campaign_id: ID de la campaña (WhatId, solo si WhoId es Contacto).
+        owner_id: ID del usuario propietario de la tarea.
+        descripcion: Descripción base de la tarea.
+    
+    Returns:
+        True si se creó correctamente, False en caso contrario.
+    """
+    try:
+        from app.services.crearCortizacion import fecha_recordatorio
+
+        recordatorio = fecha_recordatorio()
+        activity_date = recordatorio.split('T')[0]
+
+        # Si WhoId es un Lead (00Q...), no se puede usar WhatId.
+        # La campaña se agrega a la descripción.
+        es_lead = who_id.startswith('00Q')
+        descripcion_final = descripcion
+        if es_lead:
+            descripcion_final = (
+                f"{descripcion}\n\n"
+                f"Campaña: https://customer-customer-9846.lightning.force.com/lightning/r/Campaign/{campaign_id}/view"
+            )
+
+        task_data = {
+            'WhoId': who_id,
+            'OwnerId': owner_id,
+            'Subject': 'Seguimiento de campaña',
+            'ActivityDate': activity_date,
+            'Status': 'Not Started',
+            'Priority': 'High',
+            'IsReminderSet': True,
+            'Description': descripcion_final,
+            'ReminderDateTime': recordatorio
+        }
+
+        # Solo incluir WhatId si NO es un Lead (Contacto o Cuenta)
+        if not es_lead:
+            task_data['WhatId'] = campaign_id
+
+        headers_previos = dict(sf.headers)
+        sf.headers.clear()
+        headers = {
+            'Sforce-Email-Notification': 'TRUE'
+        }
+        sf.headers.update(headers)
+
+        response = sf.Task.create(task_data)
+        print("Tarea de campaña creada", response)
+        sf.headers.clear()
+        sf.headers.update(headers_previos)
+        
+        return True
+    except Exception as e:
+        print(f"Error al crear tarea de campaña: {e}")
+        if hasattr(e, 'content'):
+            print(f"Contenido del error: {e.content}")
+        elif hasattr(e, 'message'):
+            print(f"Mensaje del error: {e.message}")
+        else:
+            print(f"Error general: {str(e)}")
+        return False
+
+
 def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
     try:
         from app.services.crearCortizacion import fecha_recordatorio
