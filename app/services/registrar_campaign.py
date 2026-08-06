@@ -55,6 +55,30 @@ def _generar_variaciones_expediente(expediente: str) -> List[str]:
     return variaciones
 
 
+def _generar_variaciones_con_ceros(expediente: str, max_digitos: int = 8) -> List[str]:
+    """
+    Genera variaciones del expediente agregando ceros a la izquierda.
+    
+    Ejemplo: "35" → ["035", "0035", "00035", "000035", "0000035", "00000035"]
+    
+    Args:
+        expediente: Expediente ingresado por el usuario.
+        max_digitos: Longitud máxima a la que se pueden rellenar ceros.
+    
+    Returns:
+        Lista de variaciones con ceros agregados a la izquierda.
+    """
+    variaciones = []
+    limpio = expediente.strip()
+    if not limpio:
+        return variaciones
+
+    # Agregar ceros a la izquierda hasta alcanzar max_digitos
+    for i in range(1, max_digitos - len(limpio) + 1):
+        variaciones.append(limpio.zfill(len(limpio) + i))
+    return variaciones
+
+
 def _buscar_cuenta_por_expediente(
     sf: Salesforce,
     expediente: str,
@@ -64,9 +88,11 @@ def _buscar_cuenta_por_expediente(
     Busca una cuenta por No_expediente_No_colaborador__c.
     
     Estrategia en cascada:
-    1. Busca con el expediente exacto + negocio
+    1. Busca con el expediente exacto
     2. Si no encuentra, itera variaciones (quitando ceros) + negocio
     3. Si aún no, itera variaciones sin importar el negocio
+    4. Luego itera variaciones (agregando ceros a la izquierda) + negocio
+    5. Finalmente itera variaciones (agregando ceros) sin importar el negocio
     
     Retorna el registro de Account si encuentra, o None si no.
     """
@@ -107,6 +133,34 @@ def _buscar_cuenta_por_expediente(
         result = sf.query(query)
         if result['totalSize'] > 0:
             print(f"Cuenta encontrada con variación '{var}' (negocio no coincidente)")
+            return result['records'][0]
+
+    # ── Intento 4: variaciones agregando ceros + negocio ────────
+    variaciones_ceros = _generar_variaciones_con_ceros(expediente)
+    for var in variaciones_ceros:
+        query = (
+            "SELECT Id, Name, No_expediente_No_colaborador__c, "
+            "PersonEmail, PersonMobilePhone, Cuenta_verificada__c, Negocio__c "
+            "FROM Account "
+            f"WHERE No_expediente_No_colaborador__c = '{var}' "
+            f"AND Negocio__c = '{negocio}'"
+        )
+        result = sf.query(query)
+        if result['totalSize'] > 0:
+            print(f"Cuenta encontrada con variación '{var}' (agregando ceros) + negocio coincidente")
+            return result['records'][0]
+
+    # ── Intento 5: variaciones agregando ceros sin negocio ──────
+    for var in variaciones_ceros:
+        query = (
+            "SELECT Id, Name, No_expediente_No_colaborador__c, "
+            "PersonEmail, PersonMobilePhone, Cuenta_verificada__c, Negocio__c "
+            "FROM Account "
+            f"WHERE No_expediente_No_colaborador__c = '{var}'"
+        )
+        result = sf.query(query)
+        if result['totalSize'] > 0:
+            print(f"Cuenta encontrada con variación '{var}' (agregando ceros, negocio no coincidente)")
             return result['records'][0]
 
     return None
