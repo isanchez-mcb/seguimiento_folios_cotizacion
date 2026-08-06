@@ -6,20 +6,20 @@ from simple_salesforce import Salesforce
 # ─── Constantes ───────────────────────────────────────────────────
 
 #Sandbox
-CAMPAÑA_ZUMPANGO_TELEMARKETING = "701ct000013a5WsAAI"  # Sandbox
-CAMPAÑA_ZUMPANGO_PATRIMONIAL = "701Hp000001XfwQIAS"     # Sandbox
+#CAMPAÑA_ZUMPANGO_TELEMARKETING = "701ct000013a5WsAAI"  # Sandbox
+#CAMPAÑA_ZUMPANGO_PATRIMONIAL = "701Hp000001XfwQIAS"     # Sandbox
 
 #Produccion
-#CAMPAÑA_ZUMPANGO_TELEMARKETING = "701WR00001coz8NYAQ"  # Sandbox
-#CAMPAÑA_ZUMPANGO_PATRIMONIAL = "701WR00001cjxlaYAA"     # Sandbox
+CAMPAÑA_ZUMPANGO_TELEMARKETING = "701WR00001coz8NYAQ"  # Sandbox
+CAMPAÑA_ZUMPANGO_PATRIMONIAL = "701WR00001cjxlaYAA"     # Sandbox
 
 
 COLA_ZUMPANGO_TELEMARKETING = "Zumpango Telemarketing"
 COLA_ZUMPANGO_PATRIMONIAL = "Zumpango Patrimonial"
 COLA_ASESOR_TELEMARKETING = "Asesor_Telemarketing"
 
-OWNER_TAREA_RESPALDO = '005ct00000BdIOYAA3' #Sandbox
-#OWNER_TAREA_RESPALDO = '005WR000008PRlCYAW' #Prod
+#OWNER_TAREA_RESPALDO = '005ct00000BdIOYAA3' #Sandbox
+OWNER_TAREA_RESPALDO = '005WR000008PRlCYAW' #Prod
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
