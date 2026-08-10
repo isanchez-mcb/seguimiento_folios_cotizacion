@@ -63,6 +63,7 @@ class ViajesData(BaseModel):
 class CreateCotizacionRequest(BaseModel):
     nombre: str
     expediente_colaborador: Optional[str] = None
+    origen_prospecto: Optional[str] = None
     telefono: str
     auto_data: Optional[AutoData] = None
     gmm_data: Optional[GMMData] = None
@@ -93,3 +94,4 @@ class RegistroCampaignResponse(BaseModel):
 
 class CreateCotizacionResponse(BaseModel):
     asesor: str
+

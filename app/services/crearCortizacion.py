@@ -52,7 +52,7 @@ def data_cotizacion(data_cotizacion, owner_id):
 
         
         lead_data = {
-            'LeadSource' : 'Lucia',
+            'LeadSource' : data_cotizacion.origen_prospecto if data_cotizacion.origen_prospecto else 'Lucia',
             'FirstName' : f'Cotización: {ramo_activo} - ',
             'LastName' : data_cotizacion.nombre,
             'MobilePhone' : telefono_normalizado,
@@ -143,7 +143,7 @@ def buscar_asesor_activo(sf: Salesforce) -> str:
         print(f"Error en la busqueda de asesores activos: {e}")
         return []
 
-def asignar_propietario_carrusel(sf: Salesforce) -> tuple:
+def asignar_propietario_carrusel(sf: Salesforce, lead_source: str = 'Lucia') -> tuple:
     try:
         owners_list = buscar_asesor_activo(sf)
         size = len(owners_list)
@@ -158,7 +158,8 @@ def asignar_propietario_carrusel(sf: Salesforce) -> tuple:
         just_ids = [owner['id'] for owner in owners_list]
 
         query_ultimos = (
-            "SELECT OwnerId FROM Lead WHERE CreatedBy.Name = 'Integraciones Desarrollo Digital' AND LeadSource = 'Lucia' ORDER BY CreatedDate DESC LIMIT 5"
+            "SELECT OwnerId FROM Lead WHERE CreatedBy.Name = 'Integraciones Desarrollo Digital' "
+            f"AND LeadSource = '{lead_source}' ORDER BY CreatedDate DESC LIMIT 5"
         )
         
         last_owners_ids = []
@@ -166,9 +167,9 @@ def asignar_propietario_carrusel(sf: Salesforce) -> tuple:
             res_ultimos = sf.query(query_ultimos)
             for record in res_ultimos['records']:
                 last_owners_ids.append(record['OwnerId'])
-            print(f"DEBUG: Últimos Owners de Lucia en Salesforce: {last_owners_ids}")
+            print(f"DEBUG: Últimos Owners de '{lead_source}' en Salesforce: {last_owners_ids}")
         except Exception as e:
-            print(f"Error al consultar últimos leads de Lucia: {e}")
+            print(f"Error al consultar últimos leads de '{lead_source}': {e}")
 
         start_index = 0
         for last_owner in last_owners_ids:
