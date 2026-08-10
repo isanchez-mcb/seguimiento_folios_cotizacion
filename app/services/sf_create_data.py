@@ -3,6 +3,8 @@ import base64
 from fastapi import HTTPException
 from simple_salesforce import Salesforce
 
+from app.dependencias.sf_service import SesionExpiradaError, es_error_sesion, query_con_reintento
+
 
 def createOpportunity(sf, oportunidad_data: dict) -> str:
     try:
@@ -39,6 +41,9 @@ def createLead(sf, lead_data: dict) -> tuple:
     except Exception as e:
         error_str = str(e)
         print(e)
+        if es_error_sesion(e):
+            print("Sesión expirada al crear lead.")
+            raise SesionExpiradaError(error_str) from e
         if "DUPLICATES_DETECTED" in error_str:
             account_id = None
             try:
@@ -145,6 +150,9 @@ def crear_nota_generica(id_lead: str, sf, html_content: str, titulo: str) -> boo
         print(f"Nota '{titulo}' creada exitosamente")
         return True
     except Exception as e:
+        if es_error_sesion(e):
+            print(f"Sesión expirada al crear nota '{titulo}'.")
+            raise SesionExpiradaError(str(e)) from e
         print(f"Error al crear nota '{titulo}': {e}")
         if hasattr(e, 'content'):
             print(f"Contenido del error: {e.content}")
@@ -193,7 +201,7 @@ def obtener_record_type_id(sf, objeto: str, nombre_record_type: str) -> str:
             "SELECT Id FROM RecordType "
             f"WHERE SObjectType = '{objeto}' AND Name = '{nombre_record_type}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] == 0:
             raise HTTPException(
                 status_code=500,
@@ -229,6 +237,9 @@ def createCampaignMember(sf, member_data: dict) -> str:
         print(f"CampaignMember creado exitosamente: {result}")
         return result['id']
     except Exception as e:
+        if es_error_sesion(e):
+            print("Sesión expirada al crear CampaignMember.")
+            raise SesionExpiradaError(str(e)) from e
         print(f"Error al crear CampaignMember: {e}")
         raise
 
@@ -296,6 +307,9 @@ def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descri
         
         return True
     except Exception as e:
+        if es_error_sesion(e):
+            print("Sesión expirada al crear tarea de campaña.")
+            raise SesionExpiradaError(str(e)) from e
         print(f"Error al crear tarea de campaña: {e}")
         if hasattr(e, 'content'):
             print(f"Contenido del error: {e.content}")

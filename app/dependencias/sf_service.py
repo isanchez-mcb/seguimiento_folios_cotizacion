@@ -30,6 +30,84 @@ LAST_VALIDATION = timedelta(minutes=2)
 load_dotenv()
 APP_ENV = os.getenv("APP_ENV")
 
+
+class SesionExpiradaError(Exception):
+    """
+    Excepción para señalizar que la sesión de Salesforce expiró a mitad de un flujo.
+    El endpoint que la capture debe re-autenticar y reintentar la operación completa.
+    """
+    pass
+
+
+def es_error_sesion(error) -> bool:
+    """
+    Detecta si un error de Salesforce es por sesión expirada (INVALID_SESSION_ID).
+
+    Args:
+        error: Excepción capturada.
+
+    Returns:
+        True si el error es de sesión expirada, False en caso contrario.
+    """
+    error_str = str(error)
+    return "INVALID_SESSION_ID" in error_str or "Session expired" in error_str
+
+
+def query_con_reintento(sf: Salesforce, query: str):
+    """
+    Ejecuta una consulta de lectura con reintento automático si la sesión expiró.
+
+    Solo se usa para LECTURAS (queries). Nunca para escrituras.
+    Si la sesión expiró, re-autentica y reintenta una vez con la sesión nueva.
+    Si vuelve a fallar, se propaga el error.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        query: Consulta SOQL a ejecutar.
+
+    Returns:
+        Resultado de sf.query().
+    """
+    try:
+        return sf.query(query)
+    except Exception as e:
+        if es_error_sesion(e):
+            print("Sesión expirada en consulta de lectura. Re-autenticando y reintentando...")
+            sf_nueva = reautenticar_salesforce()
+            return sf_nueva.query(query)
+        raise
+
+
+def reautenticar_salesforce() -> Salesforce:
+    """
+    Limpia el cache y re-autentica con Salesforce, retornando una instancia nueva.
+
+    Returns:
+        Nueva instancia autenticada de Salesforce.
+    """
+    global SALESFORCE_CACHE
+    cache = SALESFORCE_CACHE
+
+    print("Re-autenticando con Salesforce...")
+    cache['instance_url'] = None
+    cache['timestamp'] = datetime.min
+    cache['lastclean'] = datetime.min
+
+    suffix = "" if APP_ENV == 'production' else "_SANDBOX"
+    print(f"Entorno {APP_ENV}")
+    CONSUMER_KEY = os.getenv(f'CONSUMER_KEY{suffix}')
+    CONSUMER_SECRET = os.getenv(f'CONSUMER_SECRET{suffix}')
+    url = os.getenv(f'url{suffix}')
+
+    data = {
+        'grant_type': 'client_credentials',
+        'client_id': CONSUMER_KEY,
+        'client_secret': CONSUMER_SECRET
+    }
+
+    return sf_auth(url, data)
+
+
 def sf_auth(url, data):
     try:
         resp = requests.post(url, data=data)
@@ -59,8 +137,7 @@ def _verificar_sesion_valida(sf) -> bool:
         sf.query("SELECT Id FROM User WHERE IsActive = True LIMIT 1")
         return True
     except Exception as e:
-        error_str = str(e)
-        if "INVALID_SESSION_ID" in error_str or "Session expired" in error_str:
+        if es_error_sesion(e):
             print("Sesión de Salesforce expirada. Se limpiará el cache.")
             return False
         # Otros errores no son de sesión, asumir que la sesión es válida

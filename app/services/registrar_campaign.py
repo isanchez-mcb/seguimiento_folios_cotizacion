@@ -13,6 +13,7 @@ from app.services.asesor_campana import (
     OWNER_TAREA_RESPALDO,
     resolver_campana_y_cola,
 )
+from app.dependencias.sf_service import get_salesforce_data, query_con_reintento
 from app.services.crearCortizacion import normalizar_telefono
 from app.services.sf_create_data import createCampaignMember, createLead, crear_nota_generica, crear_tarea_campana, obtener_record_type_id
 
@@ -103,7 +104,7 @@ def _buscar_cuenta_por_expediente(
         "FROM Account "
         f"WHERE No_expediente_No_colaborador__c = '{expediente}'"
     )
-    result = sf.query(query)
+    result = query_con_reintento(sf, query)
     if result['totalSize'] > 0:
         return result['records'][0]
 
@@ -117,7 +118,7 @@ def _buscar_cuenta_por_expediente(
             f"WHERE No_expediente_No_colaborador__c = '{var}' "
             f"AND Negocio__c = '{negocio}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] > 0:
             print(f"Cuenta encontrada con variación '{var}' + negocio coincidente")
             return result['records'][0]
@@ -130,7 +131,7 @@ def _buscar_cuenta_por_expediente(
             "FROM Account "
             f"WHERE No_expediente_No_colaborador__c = '{var}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] > 0:
             print(f"Cuenta encontrada con variación '{var}' (negocio no coincidente)")
             return result['records'][0]
@@ -145,7 +146,7 @@ def _buscar_cuenta_por_expediente(
             f"WHERE No_expediente_No_colaborador__c = '{var}' "
             f"AND Negocio__c = '{negocio}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] > 0:
             print(f"Cuenta encontrada con variación '{var}' (agregando ceros) + negocio coincidente")
             return result['records'][0]
@@ -158,7 +159,7 @@ def _buscar_cuenta_por_expediente(
             "FROM Account "
             f"WHERE No_expediente_No_colaborador__c = '{var}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] > 0:
             print(f"Cuenta encontrada con variación '{var}' (agregando ceros, negocio no coincidente)")
             return result['records'][0]
@@ -237,6 +238,12 @@ def _crear_lead_campaign(
     campaign_id, owner_id, asesor_externo_id, nombre_asesor, crear_tarea = resolver_campana_y_cola(
         request.numero_asesor, tiene_expediente, sf
     )
+
+    # Si una consulta de lectura re-autenticó durante la resolución,
+    # re-obtener la sesión fresca del cache para que las escrituras usen sesión válida.
+    # get_salesforce_data() devuelve la sesión del cache (ya re-autenticada si fue necesario).
+    print("Re-obteniendo sesión de Salesforce tras la resolución...")
+    sf = get_salesforce_data()
 
     lead_data = {
         'LeadSource': 'Sitio Web',
@@ -374,6 +381,11 @@ def registrar_en_campaign(
         # ── ESCENARIO 2: No existe cuenta → crear Lead ───────────
         print("Cuenta no encontrada. Creando lead para campaña...")
         return _crear_lead_campaign(request, telefono_normalizado, sf)
+
+    # Si la búsqueda de cuenta re-autenticó durante las consultas,
+    # re-obtener la sesión fresca para que las escrituras usen sesión válida.
+    print("Re-obteniendo sesión de Salesforce tras búsqueda de cuenta...")
+    sf = get_salesforce_data()
 
     account_id = account['Id']
     print(f"Cuenta encontrada: {account_id} - {account.get('Name', '')}")
@@ -519,7 +531,7 @@ def registrar_en_campaign(
         f"WHERE AccountId = '{account_id}' "
         "ORDER BY CreatedDate DESC"
     )
-    result_contact = sf.query(query_contact)
+    result_contact = query_con_reintento(sf, query_contact)
 
     if result_contact['totalSize'] == 0:
         raise HTTPException(
@@ -536,6 +548,11 @@ def registrar_en_campaign(
     campaign_id_member, owner_id, asesor_externo_id, nombre_asesor, crear_tarea = resolver_campana_y_cola(
         request.numero_asesor, tiene_expediente, sf
     )
+
+    # Si una consulta de lectura re-autenticó durante la resolución,
+    # re-obtener la sesión fresca del cache para que las escrituras usen sesión válida.
+    print("Re-obteniendo sesión de Salesforce tras la resolución...")
+    sf = get_salesforce_data()
 
     member_data = {
         'ContactId': contact_id,

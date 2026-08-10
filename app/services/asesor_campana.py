@@ -2,6 +2,8 @@ from typing import Optional, Dict, Any, Tuple
 
 from simple_salesforce import Salesforce
 
+from app.dependencias.sf_service import SesionExpiradaError, query_con_reintento
+
 
 # ─── Constantes ───────────────────────────────────────────────────
 
@@ -23,7 +25,7 @@ COLA_ASESOR_TELEMARKETING = "Asesor Telemarketing"
 
 #OWNER_TAREA_RESPALDO = '005ct00000BdIOYAA3' #Sandbox
 #OWNER_TAREA_RESPALDO = '005WR000008PRlCYAW' #Prod
-OWNER_TAREA_RESPALDO = '005WR00000CO8C1YAL' #Prod
+OWNER_TAREA_RESPALDO = '005WR00000CO8C1YAL' #Prod Hector
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -45,10 +47,12 @@ def verificar_cuenta_usuario(numero_asesor: str, sf: Salesforce) -> Optional[str
             "FROM User "
             f"WHERE IsActive = True AND Alias = '{numero_asesor}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] > 0:
             return result['records'][0]['Id']
         return None
+    except SesionExpiradaError:
+        raise
     except Exception as e:
         print(f"Error al verificar cuenta de usuario para asesor {numero_asesor}: {e}")
         return None
@@ -76,7 +80,7 @@ def buscar_asesor_externo(numero_asesor: str, sf: Salesforce) -> Optional[Dict[s
             f"WHERE Numero_de_asesor__c = {numero_asesor} "
             "ORDER BY CreatedDate DESC"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
 
         if result['totalSize'] == 0:
             return None
@@ -85,6 +89,8 @@ def buscar_asesor_externo(numero_asesor: str, sf: Salesforce) -> Optional[Dict[s
         record.pop('attributes', None)
         return record
 
+    except SesionExpiradaError:
+        raise
     except Exception as e:
         print(f"Error al buscar asesor externo: {e}")
         return None
@@ -107,8 +113,10 @@ def usuario_en_cola(user_id: str, nombre_cola: str, sf: Salesforce) -> bool:
             "SELECT UserOrGroupId FROM GroupMember "
             f"WHERE Group.Name = '{nombre_cola}' AND UserOrGroupId = '{user_id}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         return result['totalSize'] > 0
+    except SesionExpiradaError:
+        raise
     except Exception as e:
         print(f"Error al verificar usuario {user_id} en cola '{nombre_cola}': {e}")
         return False
@@ -131,11 +139,13 @@ def _obtener_cola_id(nombre_cola: str, sf: Salesforce) -> Optional[str]:
             "SELECT Id FROM Group "
             f"WHERE Type = 'Queue' AND Name = '{nombre_cola}'"
         )
-        result = sf.query(query)
+        result = query_con_reintento(sf, query)
         if result['totalSize'] == 0:
             print(f"Cola '{nombre_cola}' no encontrada.")
             return None
         return result['records'][0]['Id']
+    except SesionExpiradaError:
+        raise
     except Exception as e:
         print(f"Error al buscar cola '{nombre_cola}': {e}")
         return None
