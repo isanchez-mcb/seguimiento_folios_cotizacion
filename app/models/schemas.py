@@ -95,3 +95,27 @@ class RegistroCampaignResponse(BaseModel):
 class CreateCotizacionResponse(BaseModel):
     asesor: str
 
+class DatosContactoRequest(BaseModel):
+    expediente_colaborador: str
+
+class DatosContactoResponse(BaseModel):
+    expediente_buscado: str
+    nombre_cuenta: Optional[str] = None
+    correo: Optional[str] = None
+    telefono: Optional[str] = None
+    mensaje: str
+
+class CrearFolioRequest(BaseModel):
+    expediente_colaborador: str
+    numero_poliza: str
+    ramo: Optional[str] = None
+    correo: Optional[str] = None
+    telefono: Optional[str] = None
+    origen_folio: Optional[str] = None
+
+class CrearFolioResponse(BaseModel):
+    case_id: str
+    case_number: Optional[str] = None
+    case_link: Optional[str] = None
+    mensaje: str
+

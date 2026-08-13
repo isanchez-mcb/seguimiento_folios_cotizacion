@@ -1,6 +1,12 @@
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from app.models.schemas import CreateCotizacionRequest, CreateCotizacionResponse
+from app.models.schemas import (
+    CreateCotizacionRequest,
+    CreateCotizacionResponse,
+    DatosContactoResponse,
+    CrearFolioRequest,
+    CrearFolioResponse,
+)
 from app.dependencias.sf_service import get_salesforce_data
 from app.services.buscarFolio import buscar_folio 
 import pandas as pd
@@ -9,6 +15,8 @@ from app.dependencias.security import verifiy_auth
 from app.services.crearCortizacion import asignar_propietario_carrusel, buscar_asesor_activo, data_cotizacion, fecha_recordatorio, generar_texto, obtener_nombre_ramo
 from app.services.sf_create_data import crear_nota, crearTarea, createLead
 from app.services.enviar_correo import notificar_asignacion
+from app.services.contacto_cuenta import buscar_cuenta_contacto
+from app.services.crear_folio_seguimiento import crear_folio_seguimiento
 
 router = APIRouter()
 
@@ -48,6 +56,88 @@ def crear_cotizacion(request: CreateCotizacionRequest, sf=Depends(get_salesforce
         print(f"Error: {e}")
         raise HTTPException(status_code=500, detail=f"Error del servidor: {str(e)}")
 
+
+
+@router.post("/cotizacion/folio-seguimiento", response_model=CrearFolioResponse, status_code=200, tags=["Cotizacion"])
+def crear_folio_seguimiento_endpoint(
+    request: CrearFolioRequest,
+    sf=Depends(get_salesforce_data),
+    auth_user: str = Depends(verifiy_auth)
+):
+    print(f"Peticion recibida para crear folio de seguimiento: {auth_user}")
+
+    try:
+        case_id, case_number, case_link = crear_folio_seguimiento(request, sf)
+
+        print(f"Folio de seguimiento creado exitosamente: {case_id} - {case_number}")
+        return CrearFolioResponse(
+            case_id=case_id,
+            case_number=case_number,
+            case_link=case_link,
+            mensaje="Folio de seguimiento creado exitosamente",
+        )
+
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        print(f"Error al crear folio de seguimiento: {e}")
+        raise HTTPException(status_code=500, detail=f"Error del servidor: {str(e)}")
+
+
+@router.get("/cotizacion/datos-contacto", response_model=DatosContactoResponse, status_code=200, tags=["Cotización"])
+def obtener_datos_contacto(
+    expediente_colaborador: str,
+    sf=Depends(get_salesforce_data),
+    auth_user: str = Depends(verifiy_auth)
+):
+    print(f"Peticion recibida para obtener datos de contacto: {auth_user}")
+
+    if not expediente_colaborador or not expediente_colaborador.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="expediente_colaborador es requerido"
+        )
+
+    expediente_limpio = expediente_colaborador.strip()
+
+    # Buscar cuenta con búsqueda en cascada (exacto → variaciones)
+    account = buscar_cuenta_contacto(sf, expediente_limpio)
+
+    if account is None:
+        print(f"No se encontró cuenta con el expediente: {expediente_limpio}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No se encontró cuenta con el expediente: {expediente_limpio}"
+        )
+
+    nombre_cuenta = account.get('Name')
+    correo = account.get('PersonEmail')
+    telefono = account.get('PersonMobilePhone')
+    expediente_encontrado = account.get('No_expediente_No_colaborador__c')
+
+    print(
+        f"Cuenta encontrada: {nombre_cuenta} | "
+        f"expediente_encontrado={expediente_encontrado} | "
+        f"correo={correo} | telefono={telefono}"
+    )
+
+    # ── Determinar mensaje según los datos disponibles ───────────
+    if correo and telefono:
+        mensaje = "Datos de contacto encontrados"
+    elif correo and not telefono:
+        mensaje = "La cuenta no tiene teléfono registrado"
+    elif telefono and not correo:
+        mensaje = "La cuenta no tiene correo registrado"
+    else:
+        mensaje = "La cuenta no tiene datos de contacto"
+
+    return DatosContactoResponse(
+        expediente_buscado=expediente_limpio,
+        nombre_cuenta=nombre_cuenta,
+        correo=correo,
+        telefono=telefono,
+        mensaje=mensaje,
+    )
 
 
 @router.post("/cotizacion/tarea", response_model=CreateCotizacionResponse, status_code=200, tags=["Cotización"])
