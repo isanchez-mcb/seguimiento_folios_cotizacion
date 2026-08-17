@@ -1,0 +1,913 @@
+"""
+Servicio de Trazabilidad End-to-End de Asesores (Agente Lucía).
+
+Arquitectura por capas (SRP / SOLID):
+- obtener_user_id_por_alias: obtiene el User activo cuyo Alias = numero_asesor
+- obtener_nombre_asesor: obtiene el nombre del asesor (User o Asesor_externo__c)
+- consultar_leads_por_asesor: consulta Leads por OwnerId (propietario principal)
+- consultar_oportunidades_en_lote: consulta Oportunidades relacionadas en lote
+- consultar_folios_en_lote: consulta Folios (Case) vinculados a oportunidades
+- mapear_prospecto / mapear_oportunidad / mapear_folio: mapeo de registros SF a dicts
+- construir_items: ensambla la matriz de trazabilidad aplanada
+- calcular_kpis: calcula métricas agregadas
+- filtrar_por_periodo: filtra items por periodo (Lead, Oportunidad o Folio)
+- paginar_items: aplica paginación en memoria
+- obtener_trazabilidad_asesor: orquestador principal (solo lectura)
+"""
+
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+
+from simple_salesforce import Salesforce
+
+from app.dependencias.sf_service import query_con_reintento
+
+
+# ─── Constantes ───────────────────────────────────────────────────
+
+STATUS_LEAD_VALIDOS = {"Nuevo", "Stand by", "Convertido", "No convertido"}
+
+STAGE_OPP_VALIDOS = {
+    "Nueva",
+    "Cotización",
+    "Proceso de cierre",
+    "Cerrado ganado",
+    "Póliza emitida",
+    "Póliza no emitida",
+    "Concluido",
+    "Otros",
+}
+
+# Campos SOQL para cada objeto
+LEAD_FIELDS = (
+    "Id, Name, Status, IsConverted, ConvertedAccountId, ConvertedOpportunityId, "
+    "Negocio__c, Filial__c, No_expediente_No_colaborador__c, RFC__c, "
+    "Estado_de_la_republica__c, Genero__c, Edad__c, Fecha_de_nacimiento__c, "
+    "Ramos_de_interes__c, Email, MobilePhone, LeadSource, Nivel_interes__c, "
+    "Presupuesto_disponible__c, Asesor_externo__c, Campana_del__c, "
+    "Campana_del__r.Name, "
+    "Raz_n_de_perdida__c, Impedimentos__c, Comentarios_lead_perdido__c, "
+    "OwnerId, Owner.Name, CreatedById, CreatedBy.Name, "
+    "LastModifiedById, LastModifiedBy.Name, CreatedDate, LastModifiedDate"
+)
+
+OPPORTUNITY_FIELDS = (
+    "Id, Name, StageName, Sub_estatus__c, RecordTypeId, "
+    "RecordType.Name, CampaignId, Campaign.Name, "
+    "Presupuesto_disponible__c, Ramos_de_interes__c, Ramos__c, Sub_ramos__c, "
+    "Nivel_interes__c, Prima_total_cotizada__c, "
+    "Prima_total_emitida__c, Cotizacion__c, Fecha_de_seguimiento__c, "
+    "Fecha_de_cita_agendada__c, Ciclo_de_vida__c, Duracion_en_etapa_Nueva__c, "
+    "Duracion_en_etapa_Cotizacion__c, Duracion_en_etapa_Proceso_de_cierre__c, "
+    "Responsable_decision__c, Tiempo_estimado__c, Impedimentos__c, "
+    "Razon_de_perdida__c, Otra_razon_de_perdida__c, CloseDate, Probability, "
+    "CreatedDate, OwnerId, Owner.Name, LastModifiedDate, LastModifiedBy.Name"
+)
+
+CASE_FIELDS = (
+    "Id, CaseNumber, Nomenclatura_campo_bandera__c, Oportunidad__c, "
+    "Status, Subject, Tipo_de_movimiento__c, "
+    "P_liza_de_seguro__c, P_liza_de_seguro__r.Name, "
+    "P_liza_de_seguro__r.Prima_total_for__c, P_liza_de_seguro__r.Status, "
+    "Poliza_emitida__c, Poliza_no_emitida__c, "
+    "Razon_de_no_emision__c, "
+    "Ramo__c, Sub_ramos__c, Aseguradora__c, Producto_polizas__c, "
+    "CreatedDate, ClosedDate, "
+    "Asesor_externo__r.Name, CreatedBy.Name, LastModifiedBy.Name, Owner.Name"
+)
+
+ACCOUNT_FIELDS = (
+    "Id, Name, CreatedBy.Name, CreatedDate"
+)
+
+
+# ─── Helpers ──────────────────────────────────────────────────────
+
+def _limpiar_registro(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Elimina el atributo 'attributes' de un registro de Salesforce."""
+    record = dict(record)
+    record.pop("attributes", None)
+    return record
+
+
+def _normalizar_float(valor: Any) -> Optional[float]:
+    """
+    Convierte un valor de Salesforce a float, o None si no es parseable.
+    Maneja strings con formato de moneda: '$200 – $400' -> None (rango no convertible).
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto:
+            return None
+        # Quitar símbolo de moneda y comas
+        texto_limpio = texto.replace("$", "").replace(",", "").strip()
+        # Si contiene un rango (ej. "$200 – $400"), no es un número único
+        if "–" in texto_limpio or "-" in texto_limpio or "a" in texto_limpio.lower():
+            return None
+        try:
+            return float(texto_limpio)
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _normalizar_int(valor: Any) -> Optional[int]:
+    """Convierte un valor de Salesforce a int, o None si no es parseable."""
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, (int, float)):
+        return int(valor)
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto:
+            return None
+        try:
+            return int(float(texto))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def _normalizar_str(valor: Any) -> Optional[str]:
+    """Convierte un valor de Salesforce a string, o None si es vacío."""
+    if valor is None:
+        return None
+    if isinstance(valor, bool):
+        return str(valor).lower()
+    texto = str(valor).strip()
+    return texto if texto else None
+
+
+def _extraer_nombre_relacion(valor: Any) -> Optional[str]:
+    """
+    Extrae el nombre de una relación de Salesforce (Owner.Name, CreatedBy.Name, etc.).
+
+    Salesforce devuelve las relaciones como dict anidado:
+        {'Name': 'Juan Perez', 'attributes': {...}}
+    o directamente como string en algunos casos.
+
+    Args:
+        valor: Valor de la relación o string directo.
+
+    Returns:
+        El nombre como string, o None si no hay valor.
+    """
+    if valor is None:
+        return None
+    if isinstance(valor, dict):
+        nombre = valor.get("Name") or valor.get("name")
+        return _normalizar_str(nombre)
+    return _normalizar_str(valor)
+
+
+def _parsear_fecha(valor: Any) -> Optional[datetime]:
+    """Convierte un valor de fecha de Salesforce a datetime, o None si no es válido."""
+    if not valor:
+        return None
+    try:
+        return datetime.fromisoformat(str(valor).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def _fecha_en_periodo(fecha: Any, inicio: datetime, fin: datetime) -> bool:
+    """Verifica si una fecha cae dentro del periodo [inicio, fin]."""
+    dt = _parsear_fecha(fecha)
+    if dt is None:
+        return False
+    return inicio <= dt <= fin
+
+
+# ─── Capa 0: Resolución del asesor (User / Asesor_externo__c) ─────
+
+def obtener_user_id_por_alias(sf: Salesforce, numero_asesor: str) -> Optional[str]:
+    """
+    Corrobora si el asesor tiene una cuenta de usuario (User) activa en Salesforce.
+
+    El número de asesor corresponde al campo Alias del User.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        numero_asesor: Número de asesor (Alias del User).
+
+    Returns:
+        El Id del User si existe un usuario activo con ese Alias, o None si no.
+    """
+    try:
+        query = (
+            "SELECT Id, Name, Alias, IsActive, Email "
+            "FROM User "
+            f"WHERE IsActive = True AND Alias = '{numero_asesor}'"
+        )
+        result = query_con_reintento(sf, query)
+        if result["totalSize"] > 0:
+            return result["records"][0]["Id"]
+        return None
+    except Exception as e:
+        print(f"Error al verificar cuenta de usuario para asesor {numero_asesor}: {e}")
+        return None
+
+
+def obtener_nombre_asesor(sf: Salesforce, numero_asesor: str) -> Optional[str]:
+    """
+    Obtiene el nombre del asesor. Prioriza el User activo (Alias = numero_asesor);
+    si no existe, busca en Asesor_externo__c por Numero_de_asesor__c.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        numero_asesor: Número del asesor.
+
+    Returns:
+        Nombre del asesor, o None si no se encuentra.
+    """
+    try:
+        query_user = (
+            "SELECT Id, Name, Alias FROM User "
+            f"WHERE IsActive = True AND Alias = '{numero_asesor}' "
+            "ORDER BY CreatedDate DESC LIMIT 1"
+        )
+        result_user = query_con_reintento(sf, query_user)
+        if result_user["totalSize"] > 0:
+            return result_user["records"][0].get("Name")
+
+        query_asesor = (
+            "SELECT Id, Name FROM Asesor_externo__c "
+            f"WHERE Numero_de_asesor__c = {numero_asesor} "
+            "ORDER BY CreatedDate DESC LIMIT 1"
+        )
+        result_asesor = query_con_reintento(sf, query_asesor)
+        if result_asesor["totalSize"] > 0:
+            return result_asesor["records"][0].get("Name")
+        return None
+    except Exception as e:
+        print(f"Error al obtener nombre del asesor {numero_asesor}: {e}")
+        return None
+
+
+# ─── Capa 1: Consultas a Salesforce ───────────────────────────────
+
+def consultar_leads_por_asesor(
+    sf: Salesforce,
+    user_id: str,
+    status_lead: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Consulta todos los Leads del asesor filtrando por OwnerId (propietario principal).
+
+    El filtrado se hace únicamente por el OwnerId del User activo cuyo Alias
+    coincide con el número de asesor, ya que el campo Asesor_externo__c
+    frecuentemente no se llena.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        user_id: Id del User activo con Alias = numero_asesor.
+        status_lead: Filtro opcional por Status exacto del Lead.
+        fecha_inicio: Filtro opcional CreatedDate >= fecha_inicio.
+        fecha_fin: Filtro opcional CreatedDate <= fecha_fin.
+
+    Returns:
+        Lista de registros Lead.
+    """
+    condiciones = [f"OwnerId = '{user_id}'"]
+
+    if status_lead:
+        condiciones.append(f"Status = '{status_lead}'")
+
+    if fecha_inicio:
+        condiciones.append(f"CreatedDate >= {fecha_inicio}T00:00:00Z")
+
+    if fecha_fin:
+        condiciones.append(f"CreatedDate <= {fecha_fin}T23:59:59Z")
+
+    where_clause = " AND ".join(condiciones)
+
+    query = (
+        f"SELECT {LEAD_FIELDS} FROM Lead "
+        f"WHERE {where_clause} "
+        f"ORDER BY CreatedDate DESC"
+    )
+
+    result = query_con_reintento(sf, query)
+    return [_limpiar_registro(r) for r in result.get("records", [])]
+
+
+def consultar_oportunidades_en_lote(
+    sf: Salesforce,
+    opportunity_ids: List[str],
+    stage_opp: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Consulta Oportunidades en lote por lista de IDs.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        opportunity_ids: Lista de IDs de oportunidades.
+        stage_opp: Filtro opcional por StageName exacto.
+
+    Returns:
+        Dict {opportunity_id: registro de Opportunity}.
+    """
+    if not opportunity_ids:
+        return {}
+
+    ids_str = ", ".join(f"'{oid}'" for oid in opportunity_ids)
+    condiciones = [f"Id IN ({ids_str})"]
+
+    # "Otros" no se aplica en la query porque representa etapas inactivas/rezagadas
+    # que no están en el catálogo. El filtrado de "Otros" se hace en memoria.
+    if stage_opp and stage_opp != "Otros":
+        condiciones.append(f"StageName = '{stage_opp}'")
+
+    where_clause = " AND ".join(condiciones)
+    query = f"SELECT {OPPORTUNITY_FIELDS} FROM Opportunity WHERE {where_clause}"
+
+    result = query_con_reintento(sf, query)
+    oportunidades = {}
+    for record in result.get("records", []):
+        record = _limpiar_registro(record)
+        oportunidades[record["Id"]] = record
+    return oportunidades
+
+
+def consultar_folios_en_lote(
+    sf: Salesforce,
+    opportunity_ids: List[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Consulta Folios (Case) en lote por lista de IDs de oportunidades.
+
+    Los folios se vinculan a la oportunidad mediante el campo Oportunidad__c.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        opportunity_ids: Lista de IDs de oportunidades.
+
+    Returns:
+        Dict {opportunity_id: lista de registros de Case}.
+    """
+    if not opportunity_ids:
+        return {}
+
+    ids_str = ", ".join(f"'{oid}'" for oid in opportunity_ids)
+    query = (
+        f"SELECT {CASE_FIELDS} FROM Case "
+        f"WHERE Oportunidad__c IN ({ids_str})"
+    )
+
+    result = query_con_reintento(sf, query)
+    folios_por_opp: Dict[str, List[Dict[str, Any]]] = {}
+    for record in result.get("records", []):
+        record = _limpiar_registro(record)
+        opp_id = record.get("Oportunidad__c")
+        if opp_id:
+            folios_por_opp.setdefault(opp_id, []).append(record)
+    return folios_por_opp
+
+
+def consultar_cuentas_en_lote(
+    sf: Salesforce,
+    account_ids: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Consulta Cuentas (Account) en lote por lista de IDs.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        account_ids: Lista de IDs de cuentas convertidas.
+
+    Returns:
+        Dict {account_id: registro de Account}.
+    """
+    if not account_ids:
+        return {}
+
+    ids_str = ", ".join(f"'{aid}'" for aid in account_ids)
+    query = (
+        f"SELECT {ACCOUNT_FIELDS} FROM Account "
+        f"WHERE Id IN ({ids_str})"
+    )
+
+    result = query_con_reintento(sf, query)
+    cuentas = {}
+    for record in result.get("records", []):
+        record = _limpiar_registro(record)
+        cuentas[record["Id"]] = record
+    return cuentas
+
+
+# ─── Capa 2: Mapeo de registros ───────────────────────────────────
+
+def mapear_prospecto(lead: Dict[str, Any]) -> Dict[str, Any]:
+    """Mapea un registro de Lead a la estructura ProspectoInfo."""
+    return {
+        "lead_id": lead.get("Id"),
+        "name": _normalizar_str(lead.get("Name")),
+        "status": _normalizar_str(lead.get("Status")),
+        "is_converted": bool(lead.get("IsConverted", False)),
+        "negocio": _normalizar_str(lead.get("Negocio__c")),
+        "filial": _normalizar_str(lead.get("Filial__c")),
+        "no_expediente_no_colaborador": _normalizar_str(lead.get("No_expediente_No_colaborador__c")),
+        "rfc": _normalizar_str(lead.get("RFC__c")),
+        "estado_republica": _normalizar_str(lead.get("Estado_de_la_republica__c")),
+        "genero": _normalizar_str(lead.get("Genero__c")),
+        "edad": _normalizar_int(lead.get("Edad__c")),
+        "fecha_nacimiento": _normalizar_str(lead.get("Fecha_de_nacimiento__c")),
+        "ramos_interes": _normalizar_str(lead.get("Ramos_de_interes__c")),
+        "email": _normalizar_str(lead.get("Email")),
+        "mobile_phone": _normalizar_str(lead.get("MobilePhone")),
+        "lead_source": _normalizar_str(lead.get("LeadSource")),
+        "nivel_interes": _normalizar_str(lead.get("Nivel_interes__c")),
+        "presupuesto_disponible": _normalizar_float(lead.get("Presupuesto_disponible__c")),
+        "campana_del": _extraer_nombre_relacion(lead.get("Campana_del__r")) or _normalizar_str(lead.get("Campana_del__c")),
+        "razon_perdida": _normalizar_str(lead.get("Raz_n_de_perdida__c")),
+        "impedimentos": _normalizar_str(lead.get("Impedimentos__c")),
+        "comentarios_lead_perdido": _normalizar_str(lead.get("Comentarios_lead_perdido__c")),
+        "owner_name": _extraer_nombre_relacion(lead.get("Owner")),
+        "created_by_name": _extraer_nombre_relacion(lead.get("CreatedBy")),
+        "last_modified_by_name": _extraer_nombre_relacion(lead.get("LastModifiedBy")),
+        "created_date": _normalizar_str(lead.get("CreatedDate")),
+        "last_modified_date": _normalizar_str(lead.get("LastModifiedDate")),
+    }
+
+
+def mapear_cuenta(
+    lead: Dict[str, Any],
+    cuentas: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Mapea la cuenta convertida desde el Lead, o None si no fue convertido."""
+    account_id = lead.get("ConvertedAccountId")
+    if not account_id:
+        return None
+
+    account = cuentas.get(account_id, {})
+    return {
+        "account_id": account_id,
+        "account_name": _normalizar_str(account.get("Name") or lead.get("Name")),
+        "created_by_name": _extraer_nombre_relacion(account.get("CreatedBy")),
+        "created_date": _normalizar_str(account.get("CreatedDate")),
+    }
+
+
+def mapear_oportunidad(opp: Dict[str, Any]) -> Dict[str, Any]:
+    """Mapea un registro de Opportunity a la estructura OportunidadInfo."""
+    return {
+        "opportunity_id": opp.get("Id"),
+        "name": _normalizar_str(opp.get("Name")),
+        "stage_name": _normalizar_str(opp.get("StageName")),
+        "sub_estatus": _normalizar_str(opp.get("Sub_estatus__c")),
+        "record_type_name": _extraer_nombre_relacion(opp.get("RecordType")),
+        "campaign_name": _extraer_nombre_relacion(opp.get("Campaign")),
+        "presupuesto_disponible": _normalizar_float(opp.get("Presupuesto_disponible__c")),
+        "ramos_interes": _normalizar_str(opp.get("Ramos_de_interes__c")),
+        "nivel_interes": _normalizar_str(opp.get("Nivel_interes__c")),
+        "owner_name": _extraer_nombre_relacion(opp.get("Owner")),
+        "origen_oportunidad": _normalizar_str(opp.get("Origen_de_oportunidad__c")),
+        "close_date": _normalizar_str(opp.get("CloseDate")),
+        "probability": _normalizar_int(opp.get("Probability")),
+        "fecha_seguimiento": _normalizar_str(opp.get("Fecha_de_seguimiento__c")),
+        "fecha_cita_agendada": _normalizar_str(opp.get("Fecha_de_cita_agendada__c")),
+        "ciclo_de_vida": _normalizar_str(opp.get("Ciclo_de_vida__c")),
+        "duracion_etapas": {
+            "nueva_dias": _normalizar_int(opp.get("Duracion_en_etapa_Nueva__c")),
+            "cotizacion_dias": _normalizar_int(opp.get("Duracion_en_etapa_Cotizacion__c")),
+            "proceso_cierre_dias": _normalizar_int(opp.get("Duracion_en_etapa_Proceso_de_cierre__c")),
+        },
+        "responsable_decision": _normalizar_str(opp.get("Responsable_decision__c")),
+        "tiempo_estimado": _normalizar_str(opp.get("Tiempo_estimado__c")),
+        "impedimentos": _normalizar_str(opp.get("Impedimentos__c")),
+        "ramos": _normalizar_str(opp.get("Ramos__c")),
+        "sub_ramos": _normalizar_str(opp.get("Sub_ramos__c")),
+        "prima_total_cotizada": _normalizar_float(opp.get("Prima_total_cotizada__c")),
+        "prima_total_emitida": _normalizar_float(opp.get("Prima_total_emitida__c")),
+        "cotizacion": _normalizar_str(opp.get("Cotizacion__c")),
+        "razon_perdida": _normalizar_str(opp.get("Razon_de_perdida__c")),
+        "otra_razon_perdida": _normalizar_str(opp.get("Otra_razon_de_perdida__c")),
+        "created_date": _normalizar_str(opp.get("CreatedDate")),
+        "last_modified_date": _normalizar_str(opp.get("LastModifiedDate")),
+        "last_modified_by_name": _extraer_nombre_relacion(opp.get("LastModifiedBy")),
+    }
+
+
+def mapear_folio(folio: Dict[str, Any]) -> Dict[str, Any]:
+    """Mapea un registro de Case a la estructura FolioEmisionInfo."""
+    return {
+        "case_id": folio.get("Id"),
+        "case_number": _normalizar_str(folio.get("CaseNumber")),
+        "nomenclatura": _normalizar_str(folio.get("Nomenclatura_campo_bandera__c")),
+        "status": _normalizar_str(folio.get("Status")),
+        "subject": _normalizar_str(folio.get("Subject")),
+        "tipo_movimiento": _normalizar_str(folio.get("Tipo_de_movimiento__c")),
+        "razon_no_emision": _normalizar_str(folio.get("Razon_de_no_emision__c")),
+        "ramo": _normalizar_str(folio.get("Ramo__c")),
+        "sub_ramos": _normalizar_str(folio.get("Sub_ramos__c")),
+        "aseguradora": _normalizar_str(folio.get("Aseguradora__c")),
+        "producto_polizas": _normalizar_str(folio.get("Producto_polizas__c")),
+        "poliza_name": _extraer_nombre_relacion(folio.get("P_liza_de_seguro__r")) or _normalizar_str(folio.get("P_liza_de_seguro__c")),
+        "poliza_prima_total": _normalizar_float((folio.get("P_liza_de_seguro__r") or {}).get("Prima_total_for__c")),
+        "poliza_status": _normalizar_str((folio.get("P_liza_de_seguro__r") or {}).get("Status")),
+        "poliza_emitida": bool(folio.get("Poliza_emitida__c", False)),
+        "poliza_no_emitida": bool(folio.get("Poliza_no_emitida__c", False)),
+        "created_date": _normalizar_str(folio.get("CreatedDate")),
+        "closed_date": _normalizar_str(folio.get("ClosedDate")),
+        "asesor_externo_name": _extraer_nombre_relacion(folio.get("Asesor_externo__r")),
+        "created_by_name": _extraer_nombre_relacion(folio.get("CreatedBy")),
+        "last_modified_by_name": _extraer_nombre_relacion(folio.get("LastModifiedBy")),
+        "owner_name": _extraer_nombre_relacion(folio.get("Owner")),
+    }
+
+
+# ─── Capa 3: Ensamblado de items ──────────────────────────────────
+
+def construir_items(
+    leads: List[Dict[str, Any]],
+    oportunidades: Dict[str, Dict[str, Any]],
+    folios_por_opp: Dict[str, List[Dict[str, Any]]],
+    cuentas: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Ensambla la matriz de trazabilidad aplanada a partir de los resultados.
+
+    Args:
+        leads: Lista de registros Lead.
+        oportunidades: Dict {opp_id: registro Opportunity}.
+        folios_por_opp: Dict {opp_id: lista de Case}.
+        cuentas: Dict {account_id: registro Account}.
+
+    Returns:
+        Lista de items de seguimiento.
+    """
+    items = []
+    for idx, lead in enumerate(leads, start=1):
+        opp_id = lead.get("ConvertedOpportunityId")
+        opp = oportunidades.get(opp_id) if opp_id else None
+
+        folios = []
+        if opp_id:
+            for folio in folios_por_opp.get(opp_id, []):
+                folios.append(mapear_folio(folio))
+
+        items.append({
+            "seguimiento_id": f"TRC-{idx:03d}",
+            "prospecto": mapear_prospecto(lead),
+            "cuenta": mapear_cuenta(lead, cuentas),
+            "oportunidad": mapear_oportunidad(opp) if opp else None,
+            "folios_emision": folios,
+        })
+    return items
+
+
+# ─── Capa 4: KPIs ─────────────────────────────────────────────────
+
+def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Calcula métricas agregadas (KPIs) sobre los items de seguimiento.
+
+    Args:
+        items: Lista de items de seguimiento.
+
+    Returns:
+        Dict con los KPIs totales.
+    """
+    total_prospectos = len(items)
+    nuevos = 0
+    stand_by = 0
+    convertidos = 0
+    no_convertidos = 0
+    total_oportunidades = 0
+    etapa_nueva = 0
+    etapa_cotizacion = 0
+    etapa_proceso_cierre = 0
+    cerrado_ganado = 0
+    poliza_emitida = 0
+    poliza_no_emitida = 0
+    concluido = 0
+    otros = 0
+    total_folios = 0
+    monto_cotizado = 0.0
+    monto_emitido = 0.0
+
+    # Contadores de folios
+    folios_emitidos = 0
+    folios_no_emitidos = 0
+    folios_en_proceso = 0
+
+    for item in items:
+        prospecto = item["prospecto"]
+        status = (prospecto.get("status") or "").strip().lower()
+
+        if prospecto.get("is_converted"):
+            convertidos += 1
+        elif status == "nuevo":
+            nuevos += 1
+        elif status == "stand by":
+            stand_by += 1
+        else:
+            no_convertidos += 1
+
+        opp = item.get("oportunidad")
+        if opp:
+            total_oportunidades += 1
+            stage = (opp.get("stage_name") or "").strip().lower()
+            if stage == "nueva":
+                etapa_nueva += 1
+            elif stage == "cotización" or stage == "cotizacion":
+                etapa_cotizacion += 1
+            elif stage == "proceso de cierre":
+                etapa_proceso_cierre += 1
+            elif stage == "cerrado ganado":
+                cerrado_ganado += 1
+            elif stage == "póliza emitida":
+                poliza_emitida += 1
+            elif stage == "póliza no emitida":
+                poliza_no_emitida += 1
+            elif stage == "concluido":
+                concluido += 1
+            else:
+                otros += 1
+
+            prima_cotizada = opp.get("prima_total_cotizada") or 0.0
+            prima_emitida = opp.get("prima_total_emitida") or 0.0
+            monto_cotizado += prima_cotizada
+            monto_emitido += prima_emitida
+
+        # Contar folios por estado
+        for folio in item.get("folios_emision", []):
+            total_folios += 1
+            if folio.get("poliza_emitida"):
+                folios_emitidos += 1
+            elif folio.get("poliza_no_emitida"):
+                folios_no_emitidos += 1
+            else:
+                folios_en_proceso += 1
+
+    return {
+        "total_prospectos": total_prospectos,
+        "total_prospectos_nuevos": nuevos,
+        "total_prospectos_stand_by": stand_by,
+        "total_prospectos_convertidos": convertidos,
+        "total_prospectos_no_convertidos": no_convertidos,
+        "total_oportunidades_generadas": total_oportunidades,
+        "oportunidades_nueva": etapa_nueva,
+        "oportunidades_cotizacion": etapa_cotizacion,
+        "oportunidades_proceso_cierre": etapa_proceso_cierre,
+        "oportunidades_cerrado_ganado": cerrado_ganado,
+        "oportunidades_poliza_emitida": poliza_emitida,
+        "oportunidades_poliza_no_emitida": poliza_no_emitida,
+        "oportunidades_concluido": concluido,
+        "oportunidades_otros": otros,
+        "total_folios": total_folios,
+        "total_folios_emitidos": folios_emitidos,
+        "total_folios_no_emitidos": folios_no_emitidos,
+        "total_folios_en_proceso": folios_en_proceso,
+        "monto_total_cotizado": round(monto_cotizado, 2),
+        "monto_total_emitido": round(monto_emitido, 2),
+    }
+
+
+# ─── Capa 5: Filtro por periodo ───────────────────────────────────
+
+def _parsear_periodo(periodo: str) -> Optional[Tuple[datetime, datetime]]:
+    """
+    Parsea un periodo en formato 'YYYY-MM' o 'YYYY-MM:YYYY-MM'.
+
+    Returns:
+        Tuple (inicio, fin) como datetimes, o None si el formato es inválido.
+    """
+    try:
+        if ":" in periodo:
+            inicio_str, fin_str = periodo.split(":", 1)
+            inicio = datetime.strptime(inicio_str.strip(), "%Y-%m")
+            fin = datetime.strptime(fin_str.strip(), "%Y-%m")
+            # Fin = último día del mes de fin
+            if fin.month == 12:
+                fin_fin = fin.replace(day=31, hour=23, minute=59, second=59)
+            else:
+                fin_fin = fin.replace(month=fin.month + 1, day=1) - timedelta(seconds=1)
+        else:
+            inicio = datetime.strptime(periodo.strip(), "%Y-%m")
+            if inicio.month == 12:
+                fin_fin = inicio.replace(day=31, hour=23, minute=59, second=59)
+            else:
+                fin_fin = inicio.replace(month=inicio.month + 1, day=1) - timedelta(seconds=1)
+        return inicio, fin_fin
+    except (ValueError, TypeError):
+        return None
+
+
+def filtrar_por_periodo(
+    items: List[Dict[str, Any]],
+    periodo: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filtra items por periodo. Un item se incluye si el Lead, la Oportunidad
+    o alguna Póliza tiene una fecha de creación dentro del periodo.
+
+    Args:
+        items: Lista de items de seguimiento.
+        periodo: Periodo en formato 'YYYY-MM' o 'YYYY-MM:YYYY-MM'.
+
+    Returns:
+        Lista filtrada de items.
+    """
+    rango = _parsear_periodo(periodo)
+    if rango is None:
+        return items
+
+    inicio, fin = rango
+    filtrados = []
+    for item in items:
+        prospecto = item["prospecto"]
+        opp = item.get("oportunidad")
+        folios = item.get("folios_emision", [])
+
+        # Incluir si el Lead cae en el periodo
+        if _fecha_en_periodo(prospecto.get("created_date"), inicio, fin):
+            filtrados.append(item)
+            continue
+
+        # Incluir si la Oportunidad cae en el periodo
+        if opp and _fecha_en_periodo(opp.get("created_date"), inicio, fin):
+            filtrados.append(item)
+            continue
+
+        # Incluir si algún Folio (Case) cae en el periodo
+        if any(_fecha_en_periodo(folio.get("created_date"), inicio, fin) for folio in folios):
+            filtrados.append(item)
+            continue
+
+    return filtrados
+
+
+# ─── Capa 6: Paginación en memoria ────────────────────────────────
+
+def paginar_items(
+    items: List[Dict[str, Any]],
+    page: int,
+    size: int,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """
+    Aplica paginación en memoria sobre una lista de items.
+
+    Args:
+        items: Lista completa de items.
+        page: Índice de página (zero-based).
+        size: Cantidad de registros por página.
+
+    Returns:
+        Tuple (items de la página, total de registros).
+    """
+    total_records = len(items)
+    start = page * size
+    end = start + size
+    return items[start:end], total_records
+
+
+# ─── Orquestador principal ────────────────────────────────────────
+
+def obtener_trazabilidad_asesor(
+    sf: Salesforce,
+    numero_asesor: str,
+    status_lead: Optional[str] = None,
+    stage_opp: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    periodo: Optional[str] = None,
+    con_folio: Optional[bool] = None,
+    page: int = 0,
+    size: int = 10,
+) -> Dict[str, Any]:
+    """
+    Orquesta la consulta de trazabilidad end-to-end de un asesor.
+
+    Flujo:
+    1. Resuelve el User activo (Alias = numero_asesor) y el nombre del asesor.
+    2. Consulta todos los Leads del asesor por OwnerId (propietario principal).
+    3. Extrae Oportunidades relacionadas en lote.
+    4. Extrae Folios (Case) vinculados a las oportunidades en lote.
+    5. Extrae Cuentas convertidas en lote.
+    6. Ensambla items de seguimiento.
+    7. Filtra por periodo (Lead, Oportunidad o Folio) si aplica.
+    8. Filtra por stage_opp (solo oportunidades) si aplica.
+    9. Filtra por con_folio (solo items con folios de emisión) si aplica.
+    10. Calcula KPIs sobre el total filtrado.
+    11. Calcula la fecha mínima de registro.
+    12. Pagina en memoria.
+
+    Returns:
+        Dict con la estructura de respuesta (meta + items).
+    """
+    # ── 1. Resolver User y nombre del asesor ─────────────────────
+    user_id = obtener_user_id_por_alias(sf, numero_asesor)
+    nombre_asesor = obtener_nombre_asesor(sf, numero_asesor)
+
+    # ── 2. Consultar todos los Leads del asesor (por OwnerId) ────
+    leads = []
+    if user_id:
+        leads = consultar_leads_por_asesor(
+            sf,
+            user_id,
+            status_lead=status_lead,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+        )
+
+    # ── 3. Extraer Oportunidades relacionadas en lote ────────────
+    opp_ids = [
+        lead["ConvertedOpportunityId"]
+        for lead in leads
+        if lead.get("ConvertedOpportunityId")
+    ]
+    oportunidades = consultar_oportunidades_en_lote(sf, opp_ids, stage_opp=stage_opp)
+
+    # ── 4. Extraer Folios (Case) en lote ─────────────────────────
+    folios_por_opp = consultar_folios_en_lote(sf, opp_ids)
+
+    # ── 5. Extraer Cuentas convertidas en lote ───────────────────
+    account_ids = [
+        lead["ConvertedAccountId"]
+        for lead in leads
+        if lead.get("ConvertedAccountId")
+    ]
+    cuentas = consultar_cuentas_en_lote(sf, account_ids)
+
+    # ── 6. Ensamblar items ───────────────────────────────────────
+    items = construir_items(leads, oportunidades, folios_por_opp, cuentas)
+
+    # ── 7. Filtro por periodo (si aplica) ────────────────────────
+    if periodo:
+        items = filtrar_por_periodo(items, periodo)
+
+    # ── 8. Filtro por stage_opp (solo oportunidades) ─────────────
+    # El filtro stage_opp ya se aplicó en la query de oportunidades.
+    # Solo se conservan los items que tienen una oportunidad en esa etapa;
+    # los leads sin oportunidad (no convertidos o en otra etapa) se excluyen.
+    # "Otros" captura etapas inactivas/rezagadas que no están en el catálogo.
+    if stage_opp:
+        if stage_opp == "Otros":
+            items = [
+                item for item in items
+                if item.get("oportunidad") is not None
+                and (item["oportunidad"].get("stage_name") or "").strip().lower()
+                not in {s.lower() for s in STAGE_OPP_VALIDOS if s != "Otros"}
+            ]
+        else:
+            items = [item for item in items if item.get("oportunidad") is not None]
+
+    # ── 9. Filtro por con_folio (solo items con folios de emisión) ─
+    if con_folio is not None:
+        if con_folio:
+            items = [item for item in items if item.get("folios_emision")]
+        else:
+            items = [item for item in items if not item.get("folios_emision")]
+
+    # ── 10. Calcular KPIs sobre el total filtrado ────────────────
+    kpis = calcular_kpis(items)
+
+    # ── 11. Calcular fecha mínima de registro ────────────────────
+    fecha_minima = None
+    fechas = []
+    for item in items:
+        created = item.get("prospecto", {}).get("created_date")
+        if created:
+            fechas.append(created)
+    if fechas:
+        fecha_minima = min(fechas)
+
+    # ── 12. Paginar en memoria ───────────────────────────────────
+    items_pagina, total_records = paginar_items(items, page, size)
+    total_pages = (total_records + size - 1) // size if size > 0 else 0
+
+    return {
+        "status": "success",
+        "meta": {
+            "numero_asesor": numero_asesor,
+            "nombre_asesor": nombre_asesor,
+            "fecha_minima": fecha_minima,
+            "kpis_totales": kpis,
+            "pagination": {
+                "page": page,
+                "size": size,
+                "total_pages": total_pages,
+                "total_records": total_records,
+            },
+            "filtros_aplicados": {
+                "status_lead": status_lead,
+                "stage_opp": stage_opp,
+                "fecha_inicio": fecha_inicio,
+                "fecha_fin": fecha_fin,
+                "periodo": periodo,
+                "con_folio": con_folio,
+            },
+        },
+        "items": items_pagina,
+    }
