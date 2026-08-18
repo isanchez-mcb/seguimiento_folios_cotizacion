@@ -15,7 +15,7 @@ Arquitectura por capas (SRP / SOLID):
 - obtener_trazabilidad_asesor: orquestador principal (solo lectura)
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from simple_salesforce import Salesforce
@@ -109,6 +109,9 @@ def _normalizar_float(valor: Any) -> Optional[float]:
         texto_limpio = texto.replace("$", "").replace(",", "").strip()
         # Si contiene un rango (ej. "$200 – $400"), no es un número único
         if "–" in texto_limpio or "-" in texto_limpio or "a" in texto_limpio.lower():
+            return None
+        # Si contiene < o > (ej. "<100"), no es un número único
+        if "<" in texto_limpio or ">" in texto_limpio:
             return None
         try:
             return float(texto_limpio)
@@ -305,6 +308,8 @@ def consultar_oportunidades_en_lote(
     sf: Salesforce,
     opportunity_ids: List[str],
     stage_opp: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Consulta Oportunidades en lote por lista de IDs.
@@ -313,6 +318,8 @@ def consultar_oportunidades_en_lote(
         sf: Instancia autenticada de Salesforce.
         opportunity_ids: Lista de IDs de oportunidades.
         stage_opp: Filtro opcional por StageName exacto.
+        fecha_inicio: Filtro opcional CreatedDate >= fecha_inicio.
+        fecha_fin: Filtro opcional CreatedDate <= fecha_fin.
 
     Returns:
         Dict {opportunity_id: registro de Opportunity}.
@@ -320,16 +327,74 @@ def consultar_oportunidades_en_lote(
     if not opportunity_ids:
         return {}
 
-    ids_str = ", ".join(f"'{oid}'" for oid in opportunity_ids)
-    condiciones = [f"Id IN ({ids_str})"]
+    oportunidades = {}
+
+    # Procesar en lotes para evitar Error 414 URI Too Long
+    for i in range(0, len(opportunity_ids), _MAX_IDS_POR_LOTE):
+        lote_ids = opportunity_ids[i:i + _MAX_IDS_POR_LOTE]
+        ids_str = ", ".join(f"'{oid}'" for oid in lote_ids)
+        condiciones = [f"Id IN ({ids_str})"]
+
+        # "Otros" no se aplica en la query porque representa etapas inactivas/rezagadas
+        # que no están en el catálogo. El filtrado de "Otros" se hace en memoria.
+        if stage_opp and stage_opp != "Otros":
+            condiciones.append(f"StageName = '{stage_opp}'")
+
+        if fecha_inicio:
+            condiciones.append(f"CreatedDate >= {fecha_inicio}T00:00:00Z")
+
+        if fecha_fin:
+            condiciones.append(f"CreatedDate <= {fecha_fin}T23:59:59Z")
+
+        where_clause = " AND ".join(condiciones)
+        query = f"SELECT {OPPORTUNITY_FIELDS} FROM Opportunity WHERE {where_clause}"
+
+        result = query_con_reintento(sf, query)
+        for record in result.get("records", []):
+            record = _limpiar_registro(record)
+            oportunidades[record["Id"]] = record
+
+    return oportunidades
+
+
+def consultar_oportunidades_por_asesor(
+    sf: Salesforce,
+    user_id: str,
+    stage_opp: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Consulta TODAS las oportunidades del asesor (no solo las de leads convertidos).
+
+    Esto incluye oportunidades de venta directa (cross-selling, renovaciones)
+    que nacieron directamente en cuentas existentes, sin pasar por Lead.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        user_id: Id del User activo con Alias = numero_asesor.
+        stage_opp: Filtro opcional por StageName exacto.
+        fecha_inicio: Filtro opcional CreatedDate >= fecha_inicio.
+        fecha_fin: Filtro opcional CreatedDate <= fecha_fin.
+
+    Returns:
+        Dict {opportunity_id: registro de Opportunity}.
+    """
+    condiciones = [f"OwnerId = '{user_id}'"]
 
     # "Otros" no se aplica en la query porque representa etapas inactivas/rezagadas
     # que no están en el catálogo. El filtrado de "Otros" se hace en memoria.
     if stage_opp and stage_opp != "Otros":
         condiciones.append(f"StageName = '{stage_opp}'")
 
+    if fecha_inicio:
+        condiciones.append(f"CreatedDate >= {fecha_inicio}T00:00:00Z")
+
+    if fecha_fin:
+        condiciones.append(f"CreatedDate <= {fecha_fin}T23:59:59Z")
+
     where_clause = " AND ".join(condiciones)
-    query = f"SELECT {OPPORTUNITY_FIELDS} FROM Opportunity WHERE {where_clause}"
+    query = f"SELECT {OPPORTUNITY_FIELDS} FROM Opportunity WHERE {where_clause} ORDER BY CreatedDate DESC"
 
     result = query_con_reintento(sf, query)
     oportunidades = {}
@@ -337,6 +402,10 @@ def consultar_oportunidades_en_lote(
         record = _limpiar_registro(record)
         oportunidades[record["Id"]] = record
     return oportunidades
+
+
+# Tamaño máximo de IDs por consulta SOQL (evita Error 414 URI Too Long)
+_MAX_IDS_POR_LOTE = 200
 
 
 def consultar_folios_en_lote(
@@ -347,6 +416,8 @@ def consultar_folios_en_lote(
     Consulta Folios (Case) en lote por lista de IDs de oportunidades.
 
     Los folios se vinculan a la oportunidad mediante el campo Oportunidad__c.
+    Si hay muchos IDs, se divide la consulta en lotes para evitar
+    "Error 414 URI Too Long".
 
     Args:
         sf: Instancia autenticada de Salesforce.
@@ -358,19 +429,24 @@ def consultar_folios_en_lote(
     if not opportunity_ids:
         return {}
 
-    ids_str = ", ".join(f"'{oid}'" for oid in opportunity_ids)
-    query = (
-        f"SELECT {CASE_FIELDS} FROM Case "
-        f"WHERE Oportunidad__c IN ({ids_str})"
-    )
-
-    result = query_con_reintento(sf, query)
     folios_por_opp: Dict[str, List[Dict[str, Any]]] = {}
-    for record in result.get("records", []):
-        record = _limpiar_registro(record)
-        opp_id = record.get("Oportunidad__c")
-        if opp_id:
-            folios_por_opp.setdefault(opp_id, []).append(record)
+
+    # Procesar en lotes para evitar URI demasiado larga
+    for i in range(0, len(opportunity_ids), _MAX_IDS_POR_LOTE):
+        lote_ids = opportunity_ids[i:i + _MAX_IDS_POR_LOTE]
+        ids_str = ", ".join(f"'{oid}'" for oid in lote_ids)
+        query = (
+            f"SELECT {CASE_FIELDS} FROM Case "
+            f"WHERE Oportunidad__c IN ({ids_str})"
+        )
+
+        result = query_con_reintento(sf, query)
+        for record in result.get("records", []):
+            record = _limpiar_registro(record)
+            opp_id = record.get("Oportunidad__c")
+            if opp_id:
+                folios_por_opp.setdefault(opp_id, []).append(record)
+
     return folios_por_opp
 
 
@@ -380,6 +456,9 @@ def consultar_cuentas_en_lote(
 ) -> Dict[str, Dict[str, Any]]:
     """
     Consulta Cuentas (Account) en lote por lista de IDs.
+
+    Si hay muchos IDs, se divide la consulta en lotes para evitar
+    "Error 414 URI Too Long".
 
     Args:
         sf: Instancia autenticada de Salesforce.
@@ -391,17 +470,22 @@ def consultar_cuentas_en_lote(
     if not account_ids:
         return {}
 
-    ids_str = ", ".join(f"'{aid}'" for aid in account_ids)
-    query = (
-        f"SELECT {ACCOUNT_FIELDS} FROM Account "
-        f"WHERE Id IN ({ids_str})"
-    )
-
-    result = query_con_reintento(sf, query)
     cuentas = {}
-    for record in result.get("records", []):
-        record = _limpiar_registro(record)
-        cuentas[record["Id"]] = record
+
+    # Procesar en lotes para evitar Error 414 URI Too Long
+    for i in range(0, len(account_ids), _MAX_IDS_POR_LOTE):
+        lote_ids = account_ids[i:i + _MAX_IDS_POR_LOTE]
+        ids_str = ", ".join(f"'{aid}'" for aid in lote_ids)
+        query = (
+            f"SELECT {ACCOUNT_FIELDS} FROM Account "
+            f"WHERE Id IN ({ids_str})"
+        )
+
+        result = query_con_reintento(sf, query)
+        for record in result.get("records", []):
+            record = _limpiar_registro(record)
+            cuentas[record["Id"]] = record
+
     return cuentas
 
 
@@ -556,13 +640,112 @@ def construir_items(
             for folio in folios_por_opp.get(opp_id, []):
                 folios.append(mapear_folio(folio))
 
+        # Clasificar origen del registro
+        if opp and lead.get("IsConverted"):
+            origen = "PROSPECTO_CONVERTIDO"
+        elif opp and not lead.get("IsConverted"):
+            origen = "VENTA_DIRECTA_CUENTA"
+        else:
+            origen = "PROSPECTO_NO_CONVERTIDO"
+
         items.append({
             "seguimiento_id": f"TRC-{idx:03d}",
+            "origen_registro": origen,
             "prospecto": mapear_prospecto(lead),
             "cuenta": mapear_cuenta(lead, cuentas),
             "oportunidad": mapear_oportunidad(opp) if opp else None,
             "folios_emision": folios,
         })
+    return items
+
+
+def construir_items_unificada(
+    leads: List[Dict[str, Any]],
+    oportunidades: Dict[str, Dict[str, Any]],
+    folios_por_opp: Dict[str, List[Dict[str, Any]]],
+    cuentas: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Ensambla la matriz unificada de trazabilidad con clasificación de 3 escenarios.
+
+    Escenarios:
+    A: PROSPECTO_CONVERTIDO - Lead convertido con oportunidad asociada
+    B: VENTA_DIRECTA_CUENTA - Oportunidad directa en cuenta (sin Lead)
+    C: PROSPECTO_NO_CONVERTIDO - Lead no convertido sin oportunidad
+
+    Args:
+        leads: Lista de registros Lead.
+        oportunidades: Dict {opp_id: registro Opportunity}.
+        folios_por_opp: Dict {opp_id: lista de Case}.
+        cuentas: Dict {account_id: registro Account}.
+
+    Returns:
+        Lista de items de seguimiento con origen_registro.
+    """
+    items = []
+
+    # Build lookup: opportunity_id -> lead convertido
+    leads_por_opp: Dict[str, Dict] = {}
+    leads_no_convertidos = []
+
+    for lead in leads:
+        if lead.get("IsConverted"):
+            opp_id = lead.get("ConvertedOpportunityId")
+            if opp_id:
+                leads_por_opp[opp_id] = lead
+        else:
+            leads_no_convertidos.append(lead)
+
+    # Para cada oportunidad, clasificar escenario
+    for opp_id, opp in oportunidades.items():
+        lead_convertido = leads_por_opp.get(opp_id)
+
+        # Asociar folios
+        folios = folios_por_opp.get(opp_id, [])
+        folios_mapeados = [mapear_folio(f) for f in folios] if folios else []
+
+        if lead_convertido:
+            # Escenario A: Prospecto Convertido
+            origen = "PROSPECTO_CONVERTIDO"
+            prospecto_map = mapear_prospecto(lead_convertido)
+            cuenta_map = mapear_cuenta(lead_convertido, cuentas)
+        else:
+            # Escenario B: Venta Directa en Cuenta
+            origen = "VENTA_DIRECTA_CUENTA"
+            prospecto_map = None
+            # Cuenta viene directamente de la oportunidad
+            account_id = opp.get("AccountId")
+            account_name = None
+            if opp.get("Account") and isinstance(opp.get("Account"), dict):
+                account_name = _normalizar_str(opp.get("Account").get("Name"))
+            if account_id:
+                cuenta_map = {
+                    "account_id": account_id,
+                    "account_name": account_name,
+                }
+            else:
+                cuenta_map = None
+
+        items.append({
+            "seguimiento_id": f"TRC-{len(items) + 1:03d}",
+            "origen_registro": origen,
+            "prospecto": prospecto_map,
+            "cuenta": cuenta_map,
+            "oportunidad": mapear_oportunidad(opp),
+            "folios_emision": folios_mapeados,
+        })
+
+    # Escenario C: Prospectos No Convertidos (sin oportunidad)
+    for lead_nc in leads_no_convertidos:
+        items.append({
+            "seguimiento_id": f"TRC-{len(items) + 1:03d}",
+            "origen_registro": "PROSPECTO_NO_CONVERTIDO",
+            "prospecto": mapear_prospecto(lead_nc),
+            "cuenta": None,
+            "oportunidad": None,
+            "folios_emision": [],
+        })
+
     return items
 
 
@@ -578,7 +761,7 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     Returns:
         Dict con los KPIs totales.
     """
-    total_prospectos = len(items)
+    total_prospectos = 0
     nuevos = 0
     stand_by = 0
     convertidos = 0
@@ -601,19 +784,27 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     folios_no_emitidos = 0
     folios_en_proceso = 0
 
+    # KPIs nuevos para Fase 4.0
+    oportunidades_origen_prospecto = 0
+    oportunidades_origen_cuenta_existente = 0
+
     for item in items:
-        prospecto = item["prospecto"]
-        status = (prospecto.get("status") or "").strip().lower()
+        # ── Conteo de prospectos (solo items con prospecto) ──────
+        prospecto = item.get("prospecto")
+        if prospecto is not None:
+            total_prospectos += 1
+            status = (prospecto.get("status") or "").strip().lower()
 
-        if prospecto.get("is_converted"):
-            convertidos += 1
-        elif status == "nuevo":
-            nuevos += 1
-        elif status == "stand by":
-            stand_by += 1
-        else:
-            no_convertidos += 1
+            if prospecto.get("is_converted"):
+                convertidos += 1
+            elif status == "nuevo":
+                nuevos += 1
+            elif status == "stand by":
+                stand_by += 1
+            else:
+                no_convertidos += 1
 
+        # ── Conteo de oportunidades (todos los items con opp) ────
         opp = item.get("oportunidad")
         if opp:
             total_oportunidades += 1
@@ -640,7 +831,12 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             monto_cotizado += prima_cotizada
             monto_emitido += prima_emitida
 
-        # Contar folios por estado
+            # KPIs nuevos: clasificar origen de la oportunidad
+            origen = item.get("origen_registro")
+            if origen == "PROSPECTO_CONVERTIDO":
+                oportunidades_origen_prospecto += 1
+
+        # ── Contar folios por estado ─────────────────────────────
         for folio in item.get("folios_emision", []):
             total_folios += 1
             if folio.get("poliza_emitida"):
@@ -671,6 +867,9 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_folios_en_proceso": folios_en_proceso,
         "monto_total_cotizado": round(monto_cotizado, 2),
         "monto_total_emitido": round(monto_emitido, 2),
+        "total_registros_seguimiento": len(items),
+        "oportunidades_origen_prospecto": oportunidades_origen_prospecto,
+        "oportunidades_origen_cuenta_existente": total_oportunidades - oportunidades_origen_prospecto,
     }
 
 
@@ -686,15 +885,15 @@ def _parsear_periodo(periodo: str) -> Optional[Tuple[datetime, datetime]]:
     try:
         if ":" in periodo:
             inicio_str, fin_str = periodo.split(":", 1)
-            inicio = datetime.strptime(inicio_str.strip(), "%Y-%m")
-            fin = datetime.strptime(fin_str.strip(), "%Y-%m")
+            inicio = datetime.strptime(inicio_str.strip(), "%Y-%m").replace(tzinfo=timezone.utc)
+            fin = datetime.strptime(fin_str.strip(), "%Y-%m").replace(tzinfo=timezone.utc)
             # Fin = último día del mes de fin
             if fin.month == 12:
                 fin_fin = fin.replace(day=31, hour=23, minute=59, second=59)
             else:
                 fin_fin = fin.replace(month=fin.month + 1, day=1) - timedelta(seconds=1)
         else:
-            inicio = datetime.strptime(periodo.strip(), "%Y-%m")
+            inicio = datetime.strptime(periodo.strip(), "%Y-%m").replace(tzinfo=timezone.utc)
             if inicio.month == 12:
                 fin_fin = inicio.replace(day=31, hour=23, minute=59, second=59)
             else:
@@ -726,7 +925,7 @@ def filtrar_por_periodo(
     inicio, fin = rango
     filtrados = []
     for item in items:
-        prospecto = item["prospecto"]
+        prospecto = item.get("prospecto") or {}
         opp = item.get("oportunidad")
         folios = item.get("folios_emision", [])
 
@@ -821,15 +1020,31 @@ def obtener_trazabilidad_asesor(
             fecha_fin=fecha_fin,
         )
 
-    # ── 3. Extraer Oportunidades relacionadas en lote ────────────
-    opp_ids = [
-        lead["ConvertedOpportunityId"]
-        for lead in leads
-        if lead.get("ConvertedOpportunityId")
-    ]
-    oportunidades = consultar_oportunidades_en_lote(sf, opp_ids, stage_opp=stage_opp)
+    # ── 3. Consultar Oportunidades del asesor ────────────────────
+    # Si se filtra por status_lead, solo se consultan las oportunidades
+    # relacionadas a los leads filtrados (no todas las del asesor).
+    # Si no hay filtro de status_lead, se consultan TODAS las oportunidades
+    # del asesor (incluye venta directa en cuentas existentes).
+    if status_lead:
+        opp_ids = [
+            lead["ConvertedOpportunityId"]
+            for lead in leads
+            if lead.get("ConvertedOpportunityId")
+        ]
+        oportunidades = consultar_oportunidades_en_lote(
+            sf, opp_ids, stage_opp=stage_opp,
+            fecha_inicio=fecha_inicio, fecha_fin=fecha_fin,
+        )
+    else:
+        oportunidades = {}
+        if user_id:
+            oportunidades = consultar_oportunidades_por_asesor(
+                sf, user_id, stage_opp=stage_opp,
+                fecha_inicio=fecha_inicio, fecha_fin=fecha_fin,
+            )
 
     # ── 4. Extraer Folios (Case) en lote ─────────────────────────
+    opp_ids = list(oportunidades.keys())
     folios_por_opp = consultar_folios_en_lote(sf, opp_ids)
 
     # ── 5. Extraer Cuentas convertidas en lote ───────────────────
@@ -840,8 +1055,8 @@ def obtener_trazabilidad_asesor(
     ]
     cuentas = consultar_cuentas_en_lote(sf, account_ids)
 
-    # ── 6. Ensamblar items ───────────────────────────────────────
-    items = construir_items(leads, oportunidades, folios_por_opp, cuentas)
+    # ── 6. Ensamblar items con clasificación de 3 escenarios ─────
+    items = construir_items_unificada(leads, oportunidades, folios_por_opp, cuentas)
 
     # ── 7. Filtro por periodo (si aplica) ────────────────────────
     if periodo:
@@ -874,12 +1089,24 @@ def obtener_trazabilidad_asesor(
     kpis = calcular_kpis(items)
 
     # ── 11. Calcular fecha mínima de registro ────────────────────
+    # Considera la fecha de creación más antigua entre prospectos,
+    # oportunidades y folios.
     fecha_minima = None
     fechas = []
     for item in items:
-        created = item.get("prospecto", {}).get("created_date")
+        prospecto = item.get("prospecto") or {}
+        created = prospecto.get("created_date")
         if created:
             fechas.append(created)
+
+        opp = item.get("oportunidad")
+        if opp and opp.get("created_date"):
+            fechas.append(opp["created_date"])
+
+        for folio in item.get("folios_emision", []):
+            if folio.get("created_date"):
+                fechas.append(folio["created_date"])
+
     if fechas:
         fecha_minima = min(fechas)
 

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import date, datetime
 from typing import Dict, Any
 
@@ -192,7 +192,7 @@ class OportunidadInfo(BaseModel):
     sub_ramos: Optional[str] = None
     prima_total_cotizada: Optional[float] = None
     prima_total_emitida: Optional[float] = None
-    cotizacion: Optional[str] = None
+    cotizacion: Optional[Union[str, bool]] = None
     razon_perdida: Optional[str] = None
     otra_razon_perdida: Optional[str] = None
     created_date: Optional[str] = None
@@ -227,7 +227,8 @@ class FolioEmisionInfo(BaseModel):
 
 class ItemSeguimiento(BaseModel):
     seguimiento_id: str
-    prospecto: ProspectoInfo
+    origen_registro: Optional[str] = None
+    prospecto: Optional[ProspectoInfo] = None
     cuenta: Optional[CuentaInfo] = None
     oportunidad: Optional[OportunidadInfo] = None
     folios_emision: List[FolioEmisionInfo] = []
@@ -254,6 +255,9 @@ class KPIsTotales(BaseModel):
     total_folios_en_proceso: int = 0
     monto_total_cotizado: float = 0.0
     monto_total_emitido: float = 0.0
+    total_registros_seguimiento: int = 0
+    oportunidades_origen_prospecto: int = 0
+    oportunidades_origen_cuenta_existente: int = 0
 
 
 class Pagination(BaseModel):
