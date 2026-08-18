@@ -783,6 +783,8 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     folios_emitidos = 0
     folios_no_emitidos = 0
     folios_en_proceso = 0
+    polizas_canceladas = 0
+    polizas_vigentes = 0
 
     # KPIs nuevos para Fase 4.0
     oportunidades_origen_prospecto = 0
@@ -846,30 +848,53 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 folios_en_proceso += 1
 
+            # ── Contar pólizas por status (Cancelado / Vigente) ───
+            poliza_status = (folio.get("poliza_status") or "").strip().lower()
+            if poliza_status == "cancelado":
+                polizas_canceladas += 1
+            elif poliza_status == "vigente":
+                polizas_vigentes += 1
+
     return {
-        "total_prospectos": total_prospectos,
-        "total_prospectos_nuevos": nuevos,
-        "total_prospectos_stand_by": stand_by,
-        "total_prospectos_convertidos": convertidos,
-        "total_prospectos_no_convertidos": no_convertidos,
-        "total_oportunidades_generadas": total_oportunidades,
-        "oportunidades_nueva": etapa_nueva,
-        "oportunidades_cotizacion": etapa_cotizacion,
-        "oportunidades_proceso_cierre": etapa_proceso_cierre,
-        "oportunidades_cerrado_ganado": cerrado_ganado,
-        "oportunidades_poliza_emitida": poliza_emitida,
-        "oportunidades_poliza_no_emitida": poliza_no_emitida,
-        "oportunidades_concluido": concluido,
-        "oportunidades_otros": otros,
-        "total_folios": total_folios,
-        "total_folios_emitidos": folios_emitidos,
-        "total_folios_no_emitidos": folios_no_emitidos,
-        "total_folios_en_proceso": folios_en_proceso,
-        "monto_total_cotizado": round(monto_cotizado, 2),
-        "monto_total_emitido": round(monto_emitido, 2),
-        "total_registros_seguimiento": len(items),
-        "oportunidades_origen_prospecto": oportunidades_origen_prospecto,
-        "oportunidades_origen_cuenta_existente": total_oportunidades - oportunidades_origen_prospecto,
+        "resumen_ejecutivo": {
+            "totales_embudo": {
+                "total_prospectos": total_prospectos,
+                "total_oportunidades": total_oportunidades,
+                "total_polizas_emitidas": folios_emitidos,
+                "total_canceladas": polizas_canceladas,
+                "total_vigente": polizas_vigentes,
+            },
+            "metrica_financiera": {
+                "monto_total_cotizado": round(monto_cotizado, 2),
+                "monto_total_emitido": round(monto_emitido, 2),
+            },
+            "total_registros_seguimiento": len(items),
+        },
+        "detalle_prospeccion": {
+            "convertidos": convertidos,
+            "no_convertidos": no_convertidos,
+            "stand_by": stand_by,
+            "nuevos": nuevos,
+        },
+        "detalle_oportunidades": {
+            "origen": {
+                "prospectos": oportunidades_origen_prospecto,
+                "cuentas_existentes": total_oportunidades - oportunidades_origen_prospecto,
+            },
+            "etapas": {
+                "poliza_emitida": poliza_emitida,
+                "poliza_no_emitida": poliza_no_emitida,
+                "cerrado_ganado": cerrado_ganado,
+                "cotizacion": etapa_cotizacion,
+                "otros": otros,
+            },
+        },
+        "detalle_folios_tramite": {
+            "total_folios": total_folios,
+            "emitidos": folios_emitidos,
+            "en_proceso": folios_en_proceso,
+            "no_emitidos": folios_no_emitidos,
+        },
     }
 
 
@@ -1120,7 +1145,10 @@ def obtener_trazabilidad_asesor(
             "numero_asesor": numero_asesor,
             "nombre_asesor": nombre_asesor,
             "fecha_minima": fecha_minima,
-            "kpis_totales": kpis,
+            "resumen_ejecutivo": kpis["resumen_ejecutivo"],
+            "detalle_prospeccion": kpis["detalle_prospeccion"],
+            "detalle_oportunidades": kpis["detalle_oportunidades"],
+            "detalle_folios_tramite": kpis["detalle_folios_tramite"],
             "pagination": {
                 "page": page,
                 "size": size,

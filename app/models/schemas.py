@@ -234,30 +234,41 @@ class ItemSeguimiento(BaseModel):
     folios_emision: List[FolioEmisionInfo] = []
 
 
-class KPIsTotales(BaseModel):
-    total_prospectos: int = 0
-    total_prospectos_nuevos: int = 0
-    total_prospectos_stand_by: int = 0
-    total_prospectos_convertidos: int = 0
-    total_prospectos_no_convertidos: int = 0
-    total_oportunidades_generadas: int = 0
-    oportunidades_nueva: int = 0
-    oportunidades_cotizacion: int = 0
-    oportunidades_proceso_cierre: int = 0
-    oportunidades_cerrado_ganado: int = 0
-    oportunidades_poliza_emitida: int = 0
-    oportunidades_poliza_no_emitida: int = 0
-    oportunidades_concluido: int = 0
-    oportunidades_otros: int = 0
-    total_folios: int = 0
-    total_folios_emitidos: int = 0
-    total_folios_no_emitidos: int = 0
-    total_folios_en_proceso: int = 0
-    monto_total_cotizado: float = 0.0
-    monto_total_emitido: float = 0.0
+class ResumenEjecutivo(BaseModel):
+    """
+    Resumen ejecutivo del embudo de ventas.
+    """
+    totales_embudo: Dict[str, int] = {}
+    metrica_financiera: Dict[str, float] = {}
     total_registros_seguimiento: int = 0
-    oportunidades_origen_prospecto: int = 0
-    oportunidades_origen_cuenta_existente: int = 0
+
+
+class DetalleProspeccion(BaseModel):
+    """
+    Detalle de la prospección (prospectos/leads por estado).
+    """
+    convertidos: int = 0
+    no_convertidos: int = 0
+    stand_by: int = 0
+    nuevos: int = 0
+
+
+class DetalleOportunidades(BaseModel):
+    """
+    Detalle de oportunidades por origen y etapa.
+    """
+    origen: Dict[str, int] = {}
+    etapas: Dict[str, int] = {}
+
+
+class DetalleFoliosTramite(BaseModel):
+    """
+    Detalle de folios/pólizas por estado.
+    """
+    total_folios: int = 0
+    emitidos: int = 0
+    en_proceso: int = 0
+    no_emitidos: int = 0
 
 
 class Pagination(BaseModel):
@@ -280,7 +291,10 @@ class Meta(BaseModel):
     numero_asesor: str
     nombre_asesor: Optional[str] = None
     fecha_minima: Optional[str] = None
-    kpis_totales: KPIsTotales
+    resumen_ejecutivo: ResumenEjecutivo
+    detalle_prospeccion: DetalleProspeccion
+    detalle_oportunidades: DetalleOportunidades
+    detalle_folios_tramite: DetalleFoliosTramite
     pagination: Pagination
     filtros_aplicados: FiltrosAplicados
 
