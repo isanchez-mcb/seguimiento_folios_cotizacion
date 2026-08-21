@@ -115,9 +115,9 @@ def generar_texto(data_cotizacion) -> str:
 
     return "".join(lineas), "".join(descripcion)
 
-def buscar_asesor_activo(sf: Salesforce) -> str:
+def buscar_asesor_activo(sf: Salesforce, nombre_cola: str = 'Asesor Telemarketing') -> str:
     try:
-        query_cola = "SELECT UserOrGroupId FROM GroupMember Where Group.Name = 'Asesor Telemarketing'"
+        query_cola = f"SELECT UserOrGroupId FROM GroupMember Where Group.Name = '{nombre_cola}'"
         resultado_cola = sf.query(query_cola)
         ids_cola = {rm['UserOrGroupId'] for rm in resultado_cola['records']}
 
@@ -136,7 +136,7 @@ def buscar_asesor_activo(sf: Salesforce) -> str:
             if user_id in ids_cola and any(est in estado for est in estados_validos):
                 asesores_disponibles.append({'id': user_id, 'name': user_name})
 
-        print(f"Asesores de Telemarketing activos encontrados: {asesores_disponibles}")
+        print(f"Asesores activos encontrados en '{nombre_cola}': {asesores_disponibles}")
         return asesores_disponibles
 
     except Exception as e:
@@ -187,7 +187,7 @@ def asignar_propietario_carrusel(sf: Salesforce, lead_source: str = 'Lucia') -> 
         print(f"Error en la asignacion: {e}")
         return "", ""
 
-def fecha_recordatorio():
+def fecha_recordatorio(hora_fin_h: int = 17, hora_fin_m: int = 30):
     zona_local = pytz.timezone('America/Mexico_City')
     zona_utc = pytz.utc
 
@@ -201,7 +201,7 @@ def fecha_recordatorio():
         recordatorio = recordatorio.replace(hour=8, minute=30, second=0, microsecond=0)
 
     hora_inicio = recordatorio.replace(hour=8, minute=30, second=0, microsecond=0)
-    hora_fin = recordatorio.replace(hour=17, minute=30, second=0, microsecond=0)
+    hora_fin = recordatorio.replace(hour=hora_fin_h, minute=hora_fin_m, second=0, microsecond=0)
 
     if recordatorio < hora_inicio:
         recordatorio = hora_inicio

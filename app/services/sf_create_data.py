@@ -320,6 +320,68 @@ def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descri
         return False
 
 
+def crear_tarea_folio(sf, case_id: str, owner_id: str, descripcion: str) -> bool:
+    """
+    Crea una tarea de seguimiento en Salesforce asociada a un folio (Case).
+
+    A diferencia de crearTarea/crear_tarea_campana (que usan WhoId para un
+    Lead), un Case es un "What" en Salesforce, por lo que la tarea se asocia
+    vía WhatId.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        case_id: ID del Case al que asociar la tarea.
+        owner_id: ID del usuario propietario de la tarea.
+        descripcion: Descripción de la tarea.
+
+    Returns:
+        True si se creó correctamente, False en caso contrario.
+    """
+    try:
+        from app.services.crearCortizacion import fecha_recordatorio
+
+        recordatorio = fecha_recordatorio(19, 0)
+        activity_date = recordatorio.split('T')[0]
+
+        task_data = {
+            'WhatId': case_id,
+            'OwnerId': owner_id,
+            'Subject': 'Seguimiento de folio',
+            'ActivityDate': activity_date,
+            'Status': 'Not Started',
+            'Priority': 'High',
+            'IsReminderSet': True,
+            'Description': descripcion,
+            'ReminderDateTime': recordatorio
+        }
+
+        headers_previos = dict(sf.headers)
+        sf.headers.clear()
+        headers = {
+            'Sforce-Email-Notification': 'TRUE'
+        }
+        sf.headers.update(headers)
+
+        response = sf.Task.create(task_data)
+        print("Tarea de folio creada", response)
+        sf.headers.clear()
+        sf.headers.update(headers_previos)
+
+        return True
+    except Exception as e:
+        if es_error_sesion(e):
+            print("Sesión expirada al crear tarea de folio.")
+            raise SesionExpiradaError(str(e)) from e
+        print(f"Error al crear tarea de folio: {e}")
+        if hasattr(e, 'content'):
+            print(f"Contenido del error: {e.content}")
+        elif hasattr(e, 'message'):
+            print(f"Mensaje del error: {e.message}")
+        else:
+            print(f"Error general: {str(e)}")
+        return False
+
+
 def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
     try:
         from app.services.crearCortizacion import fecha_recordatorio

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date, datetime
 from typing import Dict, Any
 
@@ -107,7 +107,8 @@ class DatosContactoResponse(BaseModel):
 
 class CrearFolioRequest(BaseModel):
     expediente_colaborador: str
-    numero_poliza: str
+    tipo_movimiento: Literal['Duplicado', 'Facturas']
+    numero_poliza: Optional[str] = None
     ramo: Optional[str] = None
     correo: Optional[str] = None
     telefono: Optional[str] = None

@@ -58,7 +58,7 @@ def crear_cotizacion(request: CreateCotizacionRequest, sf=Depends(get_salesforce
 
 
 
-@router.post("/cotizacion/folio-seguimiento", response_model=CrearFolioResponse, status_code=200, tags=["Cotizacion"])
+@router.post("/cotizacion/folio-seguimiento", response_model=CrearFolioResponse, status_code=200, tags=["Cotización"])
 def crear_folio_seguimiento_endpoint(
     request: CrearFolioRequest,
     sf=Depends(get_salesforce_data),
@@ -67,14 +67,19 @@ def crear_folio_seguimiento_endpoint(
     print(f"Peticion recibida para crear folio de seguimiento: {auth_user}")
 
     try:
-        case_id, case_number, case_link = crear_folio_seguimiento(request, sf)
+        case_id, case_number, case_link, nombre_asesor = crear_folio_seguimiento(request, sf)
 
         print(f"Folio de seguimiento creado exitosamente: {case_id} - {case_number}")
+        mensaje = (
+            f"Folio de seguimiento creado exitosamente. {nombre_asesor}"
+            if nombre_asesor.startswith("Pronto")
+            else f"Folio de seguimiento creado exitosamente. Asesor asignado: {nombre_asesor}"
+        )
         return CrearFolioResponse(
             case_id=case_id,
             case_number=case_number,
             case_link=case_link,
-            mensaje="Folio de seguimiento creado exitosamente",
+            mensaje=mensaje,
         )
 
     except HTTPException as http_exc:
