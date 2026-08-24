@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nuevo Folio Asignado</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f4f4f4; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f4; padding:20px 0;">
+        <tr>
+            <td align="center">
+                <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+
+                    <!-- HEADER: Azul corporativo -->
+                    <tr>
+                        <td style="background-color:#0052A1; padding:25px 30px; text-align:center;">
+                            <img src="https://mcbpublicresources.blob.core.windows.net/assets/Logo_Blanco_Alternativo.png" alt="MCBrokers" width="160" style="display:block; margin:0 auto;">
+                        </td>
+                    </tr>
+
+                    <!-- CUERPO -->
+                    <tr>
+                        <td style="padding:30px 35px 20px 35px;">
+                            <h1 style="margin:0 0 5px 0; font-size:22px; color:#0052A1; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-weight:700;">
+                                Nuevo Folio Asignado
+                            </h1>
+                            <p style="margin:0 0 20px 0; font-size:14px; color:#5C5C5B; line-height:1.5;">
+                                <strong>${nombre_asesor}</strong> se te ha asignado un nuevo folio para su atención. A continuación encontrarás los detalles.
+                            </p>
+
+                            <!-- Datos del folio -->
+                            <h2 style="font-size:16px; color:#0052A1; margin:0 0 12px 0; padding-bottom:6px; border-bottom:2px solid #88B450; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                                Detalles del Folio
+                            </h2>
+
+                            <table width="100%" cellpadding="6" cellspacing="0" style="margin-bottom:18px;">
+                                <tr>
+                                    <td width="120" style="font-size:13px; color:#5C5C5B; font-weight:600; vertical-align:top;">Tipo de trámite:</td>
+                                    <td style="font-size:14px; color:#333333; font-weight:bold;">${tipo_movimiento}</td>
+                                </tr>
+                                <tr>
+                                    <td style="font-size:13px; color:#5C5C5B; font-weight:600; vertical-align:top;">Número de folio:</td>
+                                    <td style="font-size:14px; color:#333333;">${numero_folio}</td>
+                                </tr>
+                            </table>
+
+                            <!-- Botón Salesforce -->
+                            <table width="100%" cellpadding="12" cellspacing="0" style="margin-top:20px; margin-bottom:10px;">
+                                <tr>
+                                    <td align="center">
+                                        <a href="${url_folio}" target="_blank" style="display:inline-block; background-color:#0052A1; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-size:15px; font-weight:bold; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                                            Ver Folio en Salesforce
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- SEPARADOR -->
+                    <tr>
+                        <td style="padding:0 35px;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="height:1px; background-color:#88B450;"></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- FOOTER -->
+                    <tr>
+                        <td style="padding:20px 35px 25px 35px; text-align:center;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="font-size:12px; color:#5C5C5B; line-height:1.6;">
+                                        <p style="margin:0 0 8px 0;">
+                                            <strong style="color:#0052A1;">MCBrokers</strong> &mdash; Juntos Creamos Tranquilidad
+                                        </p>
+                                        <p style="margin:0; font-style:italic;">
+                                            Este es un mensaje automático del sistema de atención. Por favor no respondas a este correo.
+                                        </p>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+                <p style="margin:12px 0 0 0; font-size:11px; color:#999999;">
+                    &copy; 2026 MCBrokers. Todos los derechos reservados.
+                </p>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

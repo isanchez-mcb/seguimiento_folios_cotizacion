@@ -12,6 +12,7 @@ from app.dependencias.sf_service import (
 from app.models.schemas import CrearFolioRequest
 from app.services.contacto_cuenta import buscar_cuenta_contacto
 from app.services.crearCortizacion import buscar_asesor_activo
+from app.services.enviar_correo import notificar_asignacion_folio
 from app.services.sf_create_data import crear_nota_generica, crear_tarea_folio, obtener_record_type_id
 
 
@@ -21,9 +22,17 @@ RECORD_TYPE_CASE = "3.- Mantenimiento"
 RECORD_TYPE_CONTACTO = "9.- Contacto"
 OFICINA = "MCB Cervantes"
 ORIGEN_DEFAULT = "Lucia"
-COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
-OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
+#COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
+COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
+#OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
+OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
+
+# Mapeo tipo_movimiento -> Etiqueta__c del catálogo de Motivo_de_folio__c
+MAPEO_ETIQUETA_MOTIVO = {
+    'Duplicado': 'Duplicado',
+    'Facturas': 'Estado Cuenta',
+}
 
 
 # ─── Helpers ──────────────────────────────────────────────────────
@@ -176,6 +185,64 @@ def _crear_nota_contacto(case_id: str, request: CrearFolioRequest, sf: Salesforc
     return nota_creada
 
 
+def _obtener_etiqueta_motivo_id(sf: Salesforce, nombre_etiqueta: str) -> str:
+    """
+    Obtiene el Id de Etiqueta__c (catálogo de motivos de folio) a partir de
+    su nombre, buscando un Motivo_de_folio__c existente que ya lo use.
+
+    Evita depender del nombre de API del objeto catálogo (desconocido):
+    en vez de consultarlo directamente, se aprovecha que cualquier
+    Motivo_de_folio__c ya creado con esa etiqueta expone el Id vía
+    Etiqueta__r.Name.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        nombre_etiqueta: Nombre de la etiqueta buscada (ej. 'Duplicado').
+
+    Returns:
+        Id de Etiqueta__c correspondiente.
+    """
+    query = (
+        "SELECT Etiqueta__c FROM Motivo_de_folio__c "
+        f"WHERE Etiqueta__r.Name = '{nombre_etiqueta}' LIMIT 1"
+    )
+    result = query_con_reintento(sf, query)
+    if result['totalSize'] == 0:
+        raise HTTPException(
+            status_code=500,
+            detail=f"No se encontró ningún Motivo_de_folio__c existente con Etiqueta__c = '{nombre_etiqueta}'"
+        )
+    return result['records'][0]['Etiqueta__c']
+
+
+def _crear_motivo_folio(case_id: str, etiqueta_id: str, sf: Salesforce) -> bool:
+    """
+    Crea un Motivo_de_folio__c asociado al Case, con la etiqueta resuelta.
+
+    Args:
+        case_id: ID del Case (Folio__c).
+        etiqueta_id: ID de Etiqueta__c a asignar.
+        sf: Instancia autenticada de Salesforce.
+
+    Returns:
+        True si se creó correctamente, False en caso contrario.
+    """
+    try:
+        motivo_data = {
+            'Folio__c': case_id,
+            'Etiqueta__c': etiqueta_id,
+        }
+        sf.Motivo_de_folio__c.create(motivo_data)
+        print(f"Motivo_de_folio__c creado para case {case_id} con Etiqueta__c {etiqueta_id}")
+        return True
+    except Exception as e:
+        if es_error_sesion(e):
+            print("Sesión expirada al crear Motivo_de_folio__c.")
+            raise SesionExpiradaError(str(e)) from e
+        print(f"Error al crear Motivo_de_folio__c: {e}")
+        return False
+
+
 def asignar_propietario_carrusel_folio(
     sf: Salesforce,
     origen_folio: str,
@@ -253,10 +320,12 @@ def crear_folio_seguimiento(
     2. Si viene numero_poliza, busca la póliza asociada a la cuenta.
        - Si se encuentra → folio de Mantenimiento ('3.- Mantenimiento').
        - Si no viene numero_poliza, o no se encuentra la póliza →
-         folio de contingencia de Contacto ('9.- Contacto'), asociado
-         únicamente a la cuenta.
+         folio de contingencia de Contacto ('9.- Contacto'), asociado a la
+         cuenta con Description resumiendo lo recibido en el request.
     3. Resuelve el asesor asignado (carrusel sobre la cola 'Ejecutivos SAC')
     4. Crea el Case con los datos del folio
+    4.1. Si es folio de Contacto, crea el Motivo_de_folio__c asociado con
+         la Etiqueta__c correspondiente al tipo_movimiento
     5. Crea la tarea de seguimiento para el asesor asignado
     6. Crea nota de contacto (correo/teléfono) en el Case
 
@@ -280,6 +349,8 @@ def crear_folio_seguimiento(
     numero_poliza = request.numero_poliza.strip() if request.numero_poliza else ""
     poliza = _buscar_poliza_cuenta(account_id, numero_poliza, request.ramo, sf) if numero_poliza else None
 
+    etiqueta_id = None
+
     if poliza is not None:
         nombre_record_type = RECORD_TYPE_CASE
         record_type_id = obtener_record_type_id(sf, 'Case', nombre_record_type)
@@ -298,9 +369,21 @@ def crear_folio_seguimiento(
         )
         nombre_record_type = RECORD_TYPE_CONTACTO
         record_type_id = obtener_record_type_id(sf, 'Case', nombre_record_type)
+
+        nombre_etiqueta = MAPEO_ETIQUETA_MOTIVO.get(request.tipo_movimiento)
+        etiqueta_id = _obtener_etiqueta_motivo_id(sf, nombre_etiqueta)
+
+        descripcion_contacto = (
+            f"Solicitud de contacto - Tipo de movimiento: {request.tipo_movimiento}\n"
+            f"Número de póliza (no localizada): {numero_poliza or 'no proporcionado'}\n"
+            f"Ramo: {request.ramo or 'no especificado'}\n"
+            f"Origen: {origen}"
+        )
+
         case_data = {
             'RecordTypeId': record_type_id,
             'AccountId': account_id,
+            'Description': descripcion_contacto,
         }
 
     # ── 3. Resolver asesor asignado por carrusel ('Ejecutivos SAC') ──
@@ -342,12 +425,30 @@ def crear_folio_seguimiento(
     except Exception as e:
         print(f"Error al obtener CaseNumber: {e}")
 
+    # Si es folio de Contacto, registrar el Motivo_de_folio__c resuelto antes de crear el Case
+    if etiqueta_id is not None:
+        _crear_motivo_folio(case_id, etiqueta_id, sf)
+
     # ── 5. Crear tarea de seguimiento para el asesor asignado ────
     descripcion_tarea = f"Folio de seguimiento ({nombre_record_type}) - Cuenta: {account.get('Name', '')}"
     crear_tarea_folio(sf, case_id, owner_id, descripcion_tarea)
 
     # ── 6. Crear nota de contacto ────────────────────────────────
     _crear_nota_contacto(case_id, request, sf)
+
+    # ── 7. Notificar por correo al asesor asignado (CC al líder) ──
+    # es_fallback es True cuando el carrusel devolvió el respaldo (sin asesor).
+    es_fallback = (owner_id == OWNER_RESPALDO_SAC)
+    notificar_asignacion_folio(
+        sf=sf,
+        owner_id=owner_id,
+        nombre_asesor=nombre_asesor,
+        tipo_movimiento=request.tipo_movimiento,
+        numero_folio=case_number or "",
+        url_folio=case_link or "",
+        lider_id=OWNER_RESPALDO_SAC,
+        es_fallback=es_fallback,
+    )
 
     print(f"Folio de seguimiento creado: {case_id} - {case_number}")
     return case_id, case_number, case_link, nombre_asesor

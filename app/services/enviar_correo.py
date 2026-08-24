@@ -248,6 +248,140 @@ def enviar_correo_smtp(
 # CAPA 4: Orquestador para notificación de asignación
 # ═══════════════════════════════════════════════════════════════════
 
+def construir_template_folio_asignado(
+    nombre_asesor: str,
+    tipo_movimiento: str,
+    numero_folio: str,
+    url_folio: str,
+) -> str:
+    """
+    Carga el template email_folio_asignado.html y sustituye los placeholders.
+    
+    Retorna el cuerpo HTML del correo para el caso en que hay asesor asignado.
+
+    Para personalizar el correo de asignación de folios, editar
+    app/templates/email_folio_asignado.html.
+    """
+    html_raw = _cargar_template("email_folio_asignado.html")
+    template = Template(html_raw)
+
+    cuerpo_html = template.safe_substitute(
+        nombre_asesor=nombre_asesor,
+        tipo_movimiento=tipo_movimiento,
+        numero_folio=numero_folio,
+        url_folio=url_folio,
+    )
+
+    return cuerpo_html
+
+
+def construir_template_folio_sin_asesor(
+    tipo_movimiento: str,
+    numero_folio: str,
+    url_folio: str,
+) -> str:
+    """
+    Carga el template email_folio_sin_asesor.html y sustituye los placeholders.
+    
+    Retorna el cuerpo HTML del correo para el caso en que no hay asesor
+    disponible y el folio requiere asignación manual.
+
+    Para personalizar el correo de folio sin asesor, editar
+    app/templates/email_folio_sin_asesor.html.
+    """
+    html_raw = _cargar_template("email_folio_sin_asesor.html")
+    template = Template(html_raw)
+
+    cuerpo_html = template.safe_substitute(
+        tipo_movimiento=tipo_movimiento,
+        numero_folio=numero_folio,
+        url_folio=url_folio,
+    )
+
+    return cuerpo_html
+
+
+def notificar_asignacion_folio(
+    sf: Salesforce,
+    owner_id: str,
+    nombre_asesor: str,
+    tipo_movimiento: str,
+    numero_folio: str,
+    url_folio: str,
+    lider_id: str,
+    es_fallback: bool = False,
+) -> bool:
+    """
+    Orquesta el envío de correo cuando se asigna un folio (Case) a un asesor.
+
+    Flujo:
+    1. Consulta email del asesor asignado (owner_id).
+    2. Consulta email del líder (lider_id).
+    3. Construye template HTML con los datos del folio y enlace al Case.
+    4. Envía correo al asesor con CC al líder.
+
+    Escenario de fallback:
+    - Si es_fallback es True (no hay asesor disponible, el folio fue al respaldo),
+      envía el correo únicamente al líder con un mensaje de alerta.
+
+    Args:
+        sf: Instancia autenticada de Salesforce.
+        owner_id: ID del asesor asignado (User).
+        nombre_asesor: Nombre del asesor asignado.
+        tipo_movimiento: Tipo de movimiento del folio (ej. 'Duplicado').
+        numero_folio: Número de folio (CaseNumber).
+        url_folio: Enlace al Case en Salesforce.
+        lider_id: ID del líder/respaldo (User) que recibe copia o el fallback.
+        es_fallback: True si el folio fue asignado al respaldo (sin asesor
+            disponible). El llamador lo determina comparando contra la
+            constante de respaldo.
+
+    Returns:
+        True si se envió al menos un correo, False si no se pudo enviar nada.
+    """
+    email_asesor = consultar_email_sf(sf, owner_id) if not es_fallback else ""
+    email_lider = consultar_email_sf(sf, lider_id)
+
+    asunto = f"Nuevo folio asignado - {tipo_movimiento}"
+
+    if email_asesor and email_lider:
+        # Escenario normal: asesor asignado + copia al líder
+        cuerpo = construir_template_folio_asignado(
+            nombre_asesor=nombre_asesor,
+            tipo_movimiento=tipo_movimiento,
+            numero_folio=numero_folio,
+            url_folio=url_folio,
+        )
+        return enviar_correo_smtp(
+            destinatario=email_asesor,
+            asunto=asunto,
+            cuerpo_html=cuerpo,
+            cc=email_lider,
+        )
+
+    elif email_lider:
+        # Fallback: no hay asesor disponible, solo al líder con alerta
+        asunto_fallback = f"[SIN ASIGNAR] {asunto}"
+        cuerpo_fallback = construir_template_folio_sin_asesor(
+            tipo_movimiento=tipo_movimiento,
+            numero_folio=numero_folio,
+            url_folio=url_folio,
+        )
+
+        return enviar_correo_smtp(
+            destinatario=email_lider,
+            asunto=asunto_fallback,
+            cuerpo_html=cuerpo_fallback,
+        )
+
+    else:
+        logger.error(
+            "No se pudo enviar correo: no hay email del asesor ni del líder "
+            f"(owner_id={owner_id}, lider_id={lider_id})."
+        )
+        return False
+
+
 def notificar_asignacion(
     sf: Salesforce,
     owner_id: str,
