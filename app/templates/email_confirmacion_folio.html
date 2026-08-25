@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seguimiento de Trámite</title>
+</head>
+<body style="margin:0; padding:0; background-color:#f0f4f8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0f4f8; padding:40px 20px;">
+        <tr>
+            <td align="center">
+
+                <!-- CONTENEDOR ESTILO DASHBOARD -->
+                <table width="100%" max-width="600" cellpadding="0" cellspacing="0" style="max-width:600px; background-color:#ffffff; border-radius:12px; overflow:hidden; text-align:left; box-shadow:0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
+
+                    <!-- ENCABEZADO: Solo el logo a color y una línea sutil de separación -->
+                    <tr>
+                        <td style="padding:25px 30px 0 30px;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="padding-bottom:15px;">
+                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Logo_Colores_MCBrokers_Default.png" alt="MCBrokers" width="140" style="display:block; border:0;">
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td style="height:1px; background-color:#e2e8f0;"></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- CUERPO DEL CORREO -->
+                    <tr>
+                        <td style="padding:30px 30px 30px 30px;">
+
+                            <p style="margin:0 0 16px 0; font-size:16px; color:#2d3748; line-height:1.6;">
+                                Estimado usuario<br><br>
+                                Hemos recibido con éxito tu solicitud para el trámite de <strong style="color:#0052A1; font-weight:700;">${tipo_tramite}</strong>.
+
+                            </p>
+
+                            <p style="margin:0 0 16px 0; font-size:15px; color:#4a5568; line-height:1.6;">
+                                Para conocer los avances de tu proceso, se te ha asignado el siguiente <strong>número de folio</strong>:
+                            </p>
+
+                            <!-- FOLIO DESTACADO GIGANTE -->
+                            <p style="margin:0 0 30px 0; font-size:44px; font-weight:bold; color:#0052A1; letter-spacing:1px; font-family: Arial, sans-serif;">
+                                ${numero_folio}
+                            </p>
+
+                            ${boton_consultar}
+
+                            <p style="margin:0 0 16px 0; font-size:15px; color:#4a5568; line-height:1.6;">
+                                También puedes ponerte en contacto a través de nuestros canales oficiales de atención:
+                            </p>
+
+                            <!-- CANALES DE ATENCIÓN EN FILA / HORIZONTAL -->
+                            <table cellpadding="0" cellspacing="0" style="margin-bottom:15px; font-size:14px; color:#4a5568;">
+                                <tr>
+                                    <!-- WhatsApp -->
+                                    <td style="vertical-align: middle;">
+                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/whatsapp-black.svg" alt="WhatsApp" width="16" height="16" style="display:inline-block; vertical-align:middle; border:0; margin-right:5px;">
+                                        <a href="https://api.whatsapp.com/send/?phone=5215552030377&text=Hola%2C+me+interesa+conocer+m%C3%A1s+sobre+sus+servicios+de+seguros.&type=phone_number&app_absent=0" target="_blank" style="color:#0052A1; text-decoration:none; font-weight:600; vertical-align:middle;">WhatsApp</a>
+                                    </td>
+
+                                    <!-- Separador -->
+                                    <td style="padding:0 14px; color:#cbd5e0; font-size:16px;">•</td>
+
+                                    <!-- Teléfono -->
+                                    <td style="vertical-align: middle;">
+                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/phone.svg" alt="Teléfono" width="16" height="16" style="display:inline-block; vertical-align:middle; border:0; margin-right:5px;">
+                                        <span style="vertical-align:middle;">
+                                            <strong style="color:#1a202c; font-weight:600;">Teléfono:</strong>
+                                            <a href="tel:5552030377" style="color:#0052A1; text-decoration:none; font-weight:600; vertical-align:middle;">55 5203 0377</a>
+                                            <span style="color:#718096; font-size:12px;">(8:30 a 19:30 h)</span>
+                                        </span>
+                                    </td>
+
+                                    <!-- Separador -->
+                                    <td style="padding:0 14px; color:#cbd5e0; font-size:16px;">•</td>
+
+                                    <!-- Email -->
+                                    <td style="vertical-align: middle;">
+                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/email.svg" alt="Email" width="16" height="16" style="display:inline-block; vertical-align:middle; border:0; margin-right:5px;">
+                                        <a href="mailto:servicio@mcbrokers.com.mx" style="color:#0052A1; text-decoration:none; font-weight:600; vertical-align:middle;">Email</a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                        </td>
+                    </tr>
+
+                    <!-- FOOTER ESTILO BANNER CON LOGO BLANCO Y ICONOS SVG -->
+                    <tr>
+                        <td style="background-color:#0052A1; padding:25px 30px;">
+                            <table width="100%" cellpadding="0" cellspacing="0" style="text-align:left;">
+                                <tr>
+                                    <!-- Logo Blanco Izquierda -->
+                                    <td width="30%" valign="middle" style="padding-bottom:15px;">
+                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Logo_Blanco_Alternativo.png" alt="MCBrokers" width="110" style="display:block; border:0;">
+                                    </td>
+
+                                    <!-- Datos de Contacto Centro -->
+                                    <td width="40%" valign="middle" style="font-size:13px; color:#ffffff; line-height:1.5; padding-left:10px; padding-bottom:15px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+                                        <span style="color: #ffffff;">Teléfono: <a href="tel:5552030377" style="color:#ffffff !important; text-decoration:none !important; font-weight:300;"><span style="color: #ffffff !important; text-decoration: none !important;">55 5203 0377</span></a></span><br>
+                                        <span style="color: #ffffff;">Email: <a href="mailto:servicio@mcbrokers.com.mx" style="color:#ffffff !important; text-decoration:none !important; font-weight:300; border-bottom: 1px dotted #ffffff;"><span style="color: #ffffff !important; text-decoration: none !important;">servicio@mcbrokers.com.mx</span></a></span>
+                                    </td>
+
+                                    <!-- Redes Sociales Derecha con Iconos SVG Oficiales -->
+                                    <td width="30%" valign="middle" align="right" style="padding-bottom:15px;">
+                                        <table cellpadding="0" cellspacing="0" style="display:inline-block;">
+                                            <tr>
+                                                <!-- LinkedIn -->
+                                                <td style="padding-left:8px;">
+                                                    <a href="https://www.linkedin.com/company/mcbrokers/" target="_blank" style="display:inline-block;">
+                                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/linkedin.svg" alt="LinkedIn" width="24" height="24" style="display:block; border:0;">
+                                                    </a>
+                                                </td>
+                                                <!-- Instagram -->
+                                                <td style="padding-left:8px;">
+                                                    <a href="https://www.instagram.com/mcbrokersmexico" target="_blank" style="display:inline-block;">
+                                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/instagram.svg" alt="Instagram" width="24" height="24" style="display:block; border:0;">
+                                                    </a>
+                                                </td>
+                                                <!-- Facebook -->
+                                                <td style="padding-left:8px;">
+                                                    <a href="https://www.facebook.com/MCBrokersMX" target="_blank" style="display:inline-block;">
+                                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/facebook.svg" alt="Facebook" width="24" height="24" style="display:block; border:0;">
+                                                    </a>
+                                                </td>
+                                                <!-- TikTok -->
+                                                <td style="padding-left:8px;">
+                                                    <a href="https://www.tiktok.com/@mcbrokers" target="_blank" style="display:inline-block;">
+                                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/tiktok.svg" alt="TikTok" width="24" height="24" style="display:block; border:0;">
+                                                    </a>
+                                                </td>
+                                                <!-- X -->
+                                                <td style="padding-left:8px;">
+                                                    <a href="https://x.com/mcbrokersm" target="_blank" style="display:inline-block;">
+                                                        <img src="https://mcbpublicresources.blob.core.windows.net/assets/Iconos/xlogo.svg" alt="X" width="24" height="24" style="display:block; border:0;">
+                                                    </a>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                                <!-- Nota de Privacidad / Derechos -->
+                                <tr>
+                                    <td colspan="3" style="border-top:1px solid rgba(255,255,255,0.2); padding-top:15px; font-size:11px; color:#cbd5e0; line-height:1.4;">
+                                        Este es un mensaje automatizado del sistema de atención. Agradecemos no responder directamente a esta dirección de correo.<br>
+                                        &copy; 2026 MCBrokers. Todos los derechos reservados.
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

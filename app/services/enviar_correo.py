@@ -382,6 +382,85 @@ def notificar_asignacion_folio(
         return False
 
 
+def construir_template_confirmacion_folio(
+    tipo_tramite: str,
+    numero_folio: str,
+    es_mantenimiento: bool,
+) -> str:
+    """
+    Carga el template email_confirmacion_folio.html y sustituye los
+    placeholders.
+
+    El botón "Consultar Folio" solo se incluye cuando es_mantenimiento es
+    True: los folios de Contacto no tienen seguimiento público de estatus,
+    así que no se muestra el botón.
+
+    Para personalizar el correo de confirmación al usuario, editar
+    app/templates/email_confirmacion_folio.html.
+    """
+    html_raw = _cargar_template("email_confirmacion_folio.html")
+    template = Template(html_raw)
+
+    boton_consultar = ""
+    if es_mantenimiento:
+        boton_consultar = (
+            '<table cellpadding="0" cellspacing="0" style="margin-bottom:35px;">'
+            "<tr><td>"
+            f'<a href="https://mcbrokers.com.mx/servicios/seguimiento-folio?folio={numero_folio}" '
+            'target="_blank" style="display:inline-block; background: #0052A1; '
+            "background: linear-gradient(0deg, #4A90E2 0%, #0052A1 100%); color:#ffffff; "
+            "text-decoration:none; padding:12px 30px; border-radius:6px; font-size:15px; "
+            'font-weight:600; box-shadow: 0 2px 4px rgba(0,82,161,0.2);">'
+            "Consultar Folio</a>"
+            "</td></tr></table>"
+        )
+
+    cuerpo_html = template.safe_substitute(
+        tipo_tramite=tipo_tramite,
+        numero_folio=numero_folio,
+        boton_consultar=boton_consultar,
+    )
+
+    return cuerpo_html
+
+
+def notificar_confirmacion_folio(
+    correo_destinatario: str,
+    tipo_tramite: str,
+    numero_folio: str,
+    es_mantenimiento: bool,
+) -> bool:
+    """
+    Envía al usuario que solicitó el folio un correo de confirmación con su
+    número de folio.
+
+    Args:
+        correo_destinatario: Correo del usuario que solicitó el folio.
+        tipo_tramite: Tipo de trámite (ej. 'Duplicado', 'Facturas').
+        numero_folio: Número de folio (CaseNumber).
+        es_mantenimiento: True si el folio es de Mantenimiento (muestra el
+            botón "Consultar Folio"); False si es de Contacto (no lo muestra).
+
+    Returns:
+        True si se envió correctamente, False en caso contrario.
+    """
+    if not correo_destinatario:
+        logger.warning("No hay correo del usuario para enviar confirmación de folio.")
+        return False
+
+    asunto = f"Confirmación de folio - {tipo_tramite}"
+    cuerpo = construir_template_confirmacion_folio(
+        tipo_tramite=tipo_tramite,
+        numero_folio=numero_folio,
+        es_mantenimiento=es_mantenimiento,
+    )
+    return enviar_correo_smtp(
+        destinatario=correo_destinatario,
+        asunto=asunto,
+        cuerpo_html=cuerpo,
+    )
+
+
 def notificar_asignacion(
     sf: Salesforce,
     owner_id: str,

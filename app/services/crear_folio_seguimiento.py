@@ -12,7 +12,7 @@ from app.dependencias.sf_service import (
 from app.models.schemas import CrearFolioRequest
 from app.services.contacto_cuenta import buscar_cuenta_contacto
 from app.services.crearCortizacion import buscar_asesor_activo
-from app.services.enviar_correo import notificar_asignacion_folio
+from app.services.enviar_correo import notificar_asignacion_folio, notificar_confirmacion_folio
 from app.services.sf_create_data import crear_nota_generica, crear_tarea_folio, obtener_record_type_id
 
 
@@ -25,7 +25,8 @@ ORIGEN_DEFAULT = "Lucia"
 #COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
 COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
 #OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
-OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
+#OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
+OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
 
 # Mapeo tipo_movimiento -> Etiqueta__c del catálogo de Motivo_de_folio__c
@@ -437,18 +438,41 @@ def crear_folio_seguimiento(
     _crear_nota_contacto(case_id, request, sf)
 
     # ── 7. Notificar por correo al asesor asignado (CC al líder) ──
-    # es_fallback es True cuando el carrusel devolvió el respaldo (sin asesor).
-    es_fallback = (owner_id == OWNER_RESPALDO_SAC)
-    notificar_asignacion_folio(
-        sf=sf,
-        owner_id=owner_id,
-        nombre_asesor=nombre_asesor,
-        tipo_movimiento=request.tipo_movimiento,
-        numero_folio=case_number or "",
-        url_folio=case_link or "",
-        lider_id=OWNER_RESPALDO_SAC,
-        es_fallback=es_fallback,
-    )
+    # No debe fallar la creación del folio si el envío de correo falla
+    # (ej. template faltante/renombrado): el Case, la Task y la nota ya
+    # se crearon exitosamente en Salesforce en este punto.
+    try:
+        # es_fallback es True cuando el carrusel devolvió el respaldo (sin asesor).
+        es_fallback = (owner_id == OWNER_RESPALDO_SAC)
+        notificar_asignacion_folio(
+            sf=sf,
+            owner_id=owner_id,
+            nombre_asesor=nombre_asesor,
+            tipo_movimiento=request.tipo_movimiento,
+            numero_folio=case_number or "",
+            url_folio=case_link or "",
+            lider_id=OWNER_RESPALDO_SAC,
+            es_fallback=es_fallback,
+        )
+    except Exception as e:
+        print(f"Error al notificar asignación del folio {case_id} por correo: {e}")
+
+    # ── 8. Notificar confirmación del folio al usuario que lo solicitó ──
+    # El botón "Consultar Folio" solo aplica a folios de Mantenimiento;
+    # los de Contacto no tienen seguimiento público de estatus.
+    try:
+        correo_usuario = request.correo.strip() if request.correo and request.correo.strip() else ""
+        if correo_usuario and case_number:
+            notificar_confirmacion_folio(
+                correo_destinatario=correo_usuario,
+                tipo_tramite=request.tipo_movimiento,
+                numero_folio=case_number,
+                es_mantenimiento=(nombre_record_type == RECORD_TYPE_CASE),
+            )
+        elif correo_usuario and not case_number:
+            print(f"No se obtuvo CaseNumber; se omite el correo de confirmación al usuario para el case {case_id}.")
+    except Exception as e:
+        print(f"Error al notificar confirmación del folio {case_id} al usuario: {e}")
 
     print(f"Folio de seguimiento creado: {case_id} - {case_number}")
     return case_id, case_number, case_link, nombre_asesor
