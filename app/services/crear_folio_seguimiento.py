@@ -25,8 +25,8 @@ ORIGEN_DEFAULT = "Lucia"
 #COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
 COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
 #OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
-#OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
-OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
+OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
+#OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
 
 # Mapeo tipo_movimiento -> Etiqueta__c del catálogo de Motivo_de_folio__c
