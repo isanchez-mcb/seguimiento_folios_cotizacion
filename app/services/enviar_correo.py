@@ -495,8 +495,8 @@ def notificar_asignacion(
     )
 
     email_asesor = consultar_email_sf(sf, owner_id) if not es_fallback else ""
-    #email_lider = consultar_email_sf(sf, lider_id)
-    email_lider = 'isanchez@mcbrokers.com.mx'
+    email_lider = consultar_email_sf(sf, lider_id)
+    #email_lider = 'isanchez@mcbrokers.com.mx'
     # Preparar datos para el template
     nombre_prospecto = (
         lead_data.get("FirstName", "")
