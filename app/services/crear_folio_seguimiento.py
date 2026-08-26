@@ -374,10 +374,15 @@ def crear_folio_seguimiento(
         nombre_etiqueta = MAPEO_ETIQUETA_MOTIVO.get(request.tipo_movimiento)
         etiqueta_id = _obtener_etiqueta_motivo_id(sf, nombre_etiqueta)
 
+        correo = request.correo.strip() if request.correo and request.correo.strip() else "no proporcionado"
+        telefono = request.telefono.strip() if request.telefono and request.telefono.strip() else "no proporcionado"
+
         descripcion_contacto = (
             f"Solicitud de contacto - Tipo de movimiento: {request.tipo_movimiento}\n"
             f"Número de póliza (no localizada): {numero_poliza or 'no proporcionado'}\n"
             f"Ramo: {request.ramo or 'no especificado'}\n"
+            f"Correo: {correo}\n"
+            f"Teléfono: {telefono}\n"
             f"Origen: {origen}"
         )
 
