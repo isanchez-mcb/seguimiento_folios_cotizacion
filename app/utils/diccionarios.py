@@ -19,6 +19,7 @@ class tipo_folios:
     }
 
     diccionario_emision = {
+        'Creado' : 'Recibido',
         'Análisis' : 'Validando Referencias',
         'Asignado' : 'Recibido',
         'Procesado' : 'Procesando Solicitud',
@@ -30,12 +31,14 @@ class tipo_folios:
     }
 
     diccionario_buzon = {
+        'Creado' : 'Recibido',
         'Asignado' : 'Recibido',
         'Procesado' : 'Procesando Solicitud',
         'Terminado' : 'Solicitud Finalizada',
     }
 
     diccionario_mantenimiento = {
+        'Creado' : 'Recibido',
         'Análisis' : 'Validando Referencias',
         'Asignado' : 'Recibido',
         'Procesado' : 'Procesando Solicitud',
@@ -47,6 +50,7 @@ class tipo_folios:
     }
 
     diccionario_siniestros = {
+        'Creado' : 'Recibido',
         'Análisis' : 'Validando Referencias',
         'Asignado' : 'Recibido',
         'Procesado' : 'Procesando Solicitud',
@@ -55,6 +59,7 @@ class tipo_folios:
     }
 
     diccionario_cancelacion = {
+        'Creado' : 'Recibido',
         'Asignado' : 'Recibido',
         'Procesado' : 'Procesando Solicitud',
         'Terminado' : 'Solicitud Finalizada'
