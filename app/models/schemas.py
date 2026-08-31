@@ -271,6 +271,23 @@ class DetalleFoliosTramite(BaseModel):
     no_emitidos: int = 0
 
 
+class DetalleRamosFolios(BaseModel):
+    """
+    Desglose de folios por Ramo__c y por Sub_ramos__c.
+    """
+    ramo: Dict[str, int] = {}
+    sub_ramo: Dict[str, int] = {}
+
+
+class DetalleRamos(BaseModel):
+    """
+    Desglose por ramo de prospectos, oportunidades y folios.
+    """
+    prospectos: Dict[str, int] = {}
+    oportunidades: Dict[str, int] = {}
+    folios: DetalleRamosFolios
+
+
 class Pagination(BaseModel):
     page: int = 0
     size: int = 10
@@ -281,6 +298,7 @@ class Pagination(BaseModel):
 class FiltrosAplicados(BaseModel):
     status_lead: Optional[str] = None
     stage_opp: Optional[str] = None
+    ramo: Optional[str] = None
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
     periodo: Optional[str] = None
@@ -295,6 +313,7 @@ class Meta(BaseModel):
     detalle_prospeccion: DetalleProspeccion
     detalle_oportunidades: DetalleOportunidades
     detalle_folios_tramite: DetalleFoliosTramite
+    detalle_ramos: DetalleRamos
     pagination: Pagination
     filtros_aplicados: FiltrosAplicados
 

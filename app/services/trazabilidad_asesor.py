@@ -38,6 +38,19 @@ STAGE_OPP_VALIDOS = {
     "Otros",
 }
 
+# Catálogos para el desglose de ramos en los KPIs (calcular_kpis).
+# Prospecto y Oportunidad comparten catálogo (Ramos_de_interes__c).
+RAMOS_VALIDOS = {"VIDA", "DAÑOS", "ACCIDENTES Y ENFERMEDADES"}
+
+# Folio (Case.Sub_ramos__c) tiene su propio catálogo, más granular.
+SUB_RAMOS_VALIDOS = {
+    "GASTOS MÉDICOS MAYORES",
+    "VIDA INDIVIDUAL",
+    "VIDA GRUPO",
+    "HOGAR",
+    "AUTOMÓVILES",
+}
+
 # Campos SOQL para cada objeto
 LEAD_FIELDS = (
     "Id, Name, Status, IsConverted, ConvertedAccountId, ConvertedOpportunityId, "
@@ -790,6 +803,19 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     oportunidades_origen_prospecto = 0
     oportunidades_origen_cuenta_existente = 0
 
+    # Desglose por ramo (Ramos_de_interes__c en prospecto/oportunidad,
+    # Ramo__c y Sub_ramos__c en folio). Como no existen valores fuera de
+    # estos catálogos, lo que cae aquí es un campo vacío/no capturado —
+    # justo lo que se quiere medir: quién no está trazando bien el dato.
+    ramos_prospectos = {ramo: 0 for ramo in RAMOS_VALIDOS}
+    ramos_prospectos["sin_ramo"] = 0
+    ramos_oportunidades = {ramo: 0 for ramo in RAMOS_VALIDOS}
+    ramos_oportunidades["sin_ramo"] = 0
+    ramos_folios = {ramo: 0 for ramo in RAMOS_VALIDOS}
+    ramos_folios["sin_ramo"] = 0
+    sub_ramos_folios = {sub_ramo: 0 for sub_ramo in SUB_RAMOS_VALIDOS}
+    sub_ramos_folios["sin_sub_ramo"] = 0
+
     for item in items:
         # ── Conteo de prospectos (solo items con prospecto) ──────
         prospecto = item.get("prospecto")
@@ -805,6 +831,12 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
                 stand_by += 1
             else:
                 no_convertidos += 1
+
+            ramo_prospecto = prospecto.get("ramos_interes")
+            if ramo_prospecto in ramos_prospectos:
+                ramos_prospectos[ramo_prospecto] += 1
+            else:
+                ramos_prospectos["sin_ramo"] += 1
 
         # ── Conteo de oportunidades (todos los items con opp) ────
         opp = item.get("oportunidad")
@@ -828,6 +860,12 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             else:
                 otros += 1
 
+            ramo_opp = opp.get("ramos_interes")
+            if ramo_opp in ramos_oportunidades:
+                ramos_oportunidades[ramo_opp] += 1
+            else:
+                ramos_oportunidades["sin_ramo"] += 1
+
             prima_cotizada = opp.get("prima_total_cotizada") or 0.0
             prima_emitida = opp.get("prima_total_emitida") or 0.0
             monto_cotizado += prima_cotizada
@@ -841,19 +879,35 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
         # ── Contar folios por estado ─────────────────────────────
         for folio in item.get("folios_emision", []):
             total_folios += 1
+
+            ramo_folio = folio.get("ramo")
+            if ramo_folio in ramos_folios:
+                ramos_folios[ramo_folio] += 1
+            else:
+                ramos_folios["sin_ramo"] += 1
+
+            sub_ramo_folio = folio.get("sub_ramos")
+            if sub_ramo_folio in sub_ramos_folios:
+                sub_ramos_folios[sub_ramo_folio] += 1
+            else:
+                sub_ramos_folios["sin_sub_ramo"] += 1
+
             if folio.get("poliza_emitida"):
                 folios_emitidos += 1
+
+                # ── Contar pólizas por status (Cancelado / Vigente) ───
+                # Solo entre folios emitidos: un folio aún en proceso puede
+                # traer una póliza ya existente/activa referenciada (no una
+                # que él mismo emitió), y no debe contarse aquí.
+                poliza_status = (folio.get("poliza_status") or "").strip().lower()
+                if poliza_status == "cancelado":
+                    polizas_canceladas += 1
+                elif poliza_status == "vigente":
+                    polizas_vigentes += 1
             elif folio.get("poliza_no_emitida"):
                 folios_no_emitidos += 1
             else:
                 folios_en_proceso += 1
-
-            # ── Contar pólizas por status (Cancelado / Vigente) ───
-            poliza_status = (folio.get("poliza_status") or "").strip().lower()
-            if poliza_status == "cancelado":
-                polizas_canceladas += 1
-            elif poliza_status == "vigente":
-                polizas_vigentes += 1
 
     return {
         "resumen_ejecutivo": {
@@ -882,10 +936,13 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "cuentas_existentes": total_oportunidades - oportunidades_origen_prospecto,
             },
             "etapas": {
+                "nueva": etapa_nueva,
+                "cotizacion": etapa_cotizacion,
+                "proceso_cierre": etapa_proceso_cierre,
+                "cerrado_ganado": cerrado_ganado,
                 "poliza_emitida": poliza_emitida,
                 "poliza_no_emitida": poliza_no_emitida,
-                "cerrado_ganado": cerrado_ganado,
-                "cotizacion": etapa_cotizacion,
+                "concluido": concluido,
                 "otros": otros,
             },
         },
@@ -894,6 +951,14 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
             "emitidos": folios_emitidos,
             "en_proceso": folios_en_proceso,
             "no_emitidos": folios_no_emitidos,
+        },
+        "detalle_ramos": {
+            "prospectos": ramos_prospectos,
+            "oportunidades": ramos_oportunidades,
+            "folios": {
+                "ramo": ramos_folios,
+                "sub_ramo": sub_ramos_folios,
+            },
         },
     }
 
@@ -972,6 +1037,43 @@ def filtrar_por_periodo(
     return filtrados
 
 
+def filtrar_por_ramo(
+    items: List[Dict[str, Any]],
+    ramo: str,
+) -> List[Dict[str, Any]]:
+    """
+    Filtra items por ramo. Un item se incluye si el prospecto, la
+    oportunidad (Ramos_de_interes__c) o algún folio (Ramo__c) coincide
+    con el ramo solicitado.
+
+    Args:
+        items: Lista de items de seguimiento.
+        ramo: Uno de RAMOS_VALIDOS.
+
+    Returns:
+        Lista filtrada de items.
+    """
+    filtrados = []
+    for item in items:
+        prospecto = item.get("prospecto") or {}
+        opp = item.get("oportunidad")
+        folios = item.get("folios_emision", [])
+
+        if prospecto.get("ramos_interes") == ramo:
+            filtrados.append(item)
+            continue
+
+        if opp and opp.get("ramos_interes") == ramo:
+            filtrados.append(item)
+            continue
+
+        if any(folio.get("ramo") == ramo for folio in folios):
+            filtrados.append(item)
+            continue
+
+    return filtrados
+
+
 # ─── Capa 6: Paginación en memoria ────────────────────────────────
 
 def paginar_items(
@@ -1003,6 +1105,7 @@ def obtener_trazabilidad_asesor(
     numero_asesor: str,
     status_lead: Optional[str] = None,
     stage_opp: Optional[str] = None,
+    ramo: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
     periodo: Optional[str] = None,
@@ -1021,11 +1124,12 @@ def obtener_trazabilidad_asesor(
     5. Extrae Cuentas convertidas en lote.
     6. Ensambla items de seguimiento.
     7. Filtra por periodo (Lead, Oportunidad o Folio) si aplica.
-    8. Filtra por stage_opp (solo oportunidades) si aplica.
-    9. Filtra por con_folio (solo items con folios de emisión) si aplica.
-    10. Calcula KPIs sobre el total filtrado.
-    11. Calcula la fecha mínima de registro.
-    12. Pagina en memoria.
+    8. Filtra por ramo (Lead, Oportunidad o Folio) si aplica.
+    9. Filtra por stage_opp (solo oportunidades) si aplica.
+    10. Filtra por con_folio (solo items con folios de emisión) si aplica.
+    11. Calcula KPIs sobre el total filtrado.
+    12. Calcula la fecha mínima de registro.
+    13. Pagina en memoria.
 
     Returns:
         Dict con la estructura de respuesta (meta + items).
@@ -1087,7 +1191,11 @@ def obtener_trazabilidad_asesor(
     if periodo:
         items = filtrar_por_periodo(items, periodo)
 
-    # ── 8. Filtro por stage_opp (solo oportunidades) ─────────────
+    # ── 8. Filtro por ramo (Lead, Oportunidad o Folio) si aplica ──
+    if ramo:
+        items = filtrar_por_ramo(items, ramo)
+
+    # ── 9. Filtro por stage_opp (solo oportunidades) ─────────────
     # El filtro stage_opp ya se aplicó en la query de oportunidades.
     # Solo se conservan los items que tienen una oportunidad en esa etapa;
     # los leads sin oportunidad (no convertidos o en otra etapa) se excluyen.
@@ -1103,17 +1211,17 @@ def obtener_trazabilidad_asesor(
         else:
             items = [item for item in items if item.get("oportunidad") is not None]
 
-    # ── 9. Filtro por con_folio (solo items con folios de emisión) ─
+    # ── 10. Filtro por con_folio (solo items con folios de emisión) ─
     if con_folio is not None:
         if con_folio:
             items = [item for item in items if item.get("folios_emision")]
         else:
             items = [item for item in items if not item.get("folios_emision")]
 
-    # ── 10. Calcular KPIs sobre el total filtrado ────────────────
+    # ── 11. Calcular KPIs sobre el total filtrado ────────────────
     kpis = calcular_kpis(items)
 
-    # ── 11. Calcular fecha mínima de registro ────────────────────
+    # ── 12. Calcular fecha mínima de registro ────────────────────
     # Considera la fecha de creación más antigua entre prospectos,
     # oportunidades y folios.
     fecha_minima = None
@@ -1135,7 +1243,7 @@ def obtener_trazabilidad_asesor(
     if fechas:
         fecha_minima = min(fechas)
 
-    # ── 12. Paginar en memoria ───────────────────────────────────
+    # ── 13. Paginar en memoria ───────────────────────────────────
     items_pagina, total_records = paginar_items(items, page, size)
     total_pages = (total_records + size - 1) // size if size > 0 else 0
 
@@ -1149,6 +1257,7 @@ def obtener_trazabilidad_asesor(
             "detalle_prospeccion": kpis["detalle_prospeccion"],
             "detalle_oportunidades": kpis["detalle_oportunidades"],
             "detalle_folios_tramite": kpis["detalle_folios_tramite"],
+            "detalle_ramos": kpis["detalle_ramos"],
             "pagination": {
                 "page": page,
                 "size": size,
@@ -1158,6 +1267,7 @@ def obtener_trazabilidad_asesor(
             "filtros_aplicados": {
                 "status_lead": status_lead,
                 "stage_opp": stage_opp,
+                "ramo": ramo,
                 "fecha_inicio": fecha_inicio,
                 "fecha_fin": fecha_fin,
                 "periodo": periodo,

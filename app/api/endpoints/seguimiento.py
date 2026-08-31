@@ -14,6 +14,7 @@ from app.models.schemas import SeguimientoAsesorResponse
 from app.services.trazabilidad_asesor import (
     STATUS_LEAD_VALIDOS,
     STAGE_OPP_VALIDOS,
+    RAMOS_VALIDOS,
     obtener_trazabilidad_asesor,
 )
 
@@ -35,6 +36,10 @@ def obtener_seguimiento_asesor(
     stage_opp: Optional[str] = Query(
         None,
         description="Filtra por StageName de la Oportunidad. Válidos: Nueva, Cotización, Proceso de cierre, Cerrado ganado, Póliza emitida, Póliza no emitida, Concluido, Otros (etapas inactivas/rezagadas)",
+    ),
+    ramo: Optional[str] = Query(
+        None,
+        description="Filtra por Ramo/Ramos_de_interes (Lead, Oportunidad o Folio). Válidos: VIDA, DAÑOS, ACCIDENTES Y ENFERMEDADES",
     ),
     fecha_inicio: Optional[str] = Query(
         None,
@@ -93,12 +98,23 @@ def obtener_seguimiento_asesor(
             ),
         )
 
+    # ── Validar ramo ──────────────────────────────────────────────
+    if ramo and ramo not in RAMOS_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Valor inválido para 'ramo': '{ramo}'. "
+                f"Válidos: {', '.join(sorted(RAMOS_VALIDOS))}"
+            ),
+        )
+
     try:
         resultado = obtener_trazabilidad_asesor(
             sf=sf,
             numero_asesor=numero_asesor,
             status_lead=status_lead,
             stage_opp=stage_opp,
+            ramo=ramo,
             fecha_inicio=fecha_inicio,
             fecha_fin=fecha_fin,
             periodo=periodo,
