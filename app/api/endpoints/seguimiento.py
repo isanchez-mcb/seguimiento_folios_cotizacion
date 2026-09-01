@@ -4,18 +4,25 @@ Endpoint de Trazabilidad End-to-End de Asesores (Agente Lucía).
 Solo consulta (GET). No crea ni modifica registros en Salesforce.
 """
 
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.dependencias.security import verifiy_auth
 from app.dependencias.sf_service import get_salesforce_data
-from app.models.schemas import SeguimientoAsesorResponse
+from app.models.schemas import SeguimientoAsesorResponse, SeguimientoGlobalResponse
 from app.services.trazabilidad_asesor import (
     STATUS_LEAD_VALIDOS,
     STAGE_OPP_VALIDOS,
     RAMOS_VALIDOS,
     obtener_trazabilidad_asesor,
+)
+from app.services.ranking_asesores import (
+    ORDER_VALIDOS,
+    PERIODO_VALIDOS,
+    SORT_BY_VALIDOS,
+    obtener_ranking_global,
 )
 
 router = APIRouter()
@@ -127,4 +134,94 @@ def obtener_seguimiento_asesor(
         raise http_exc
     except Exception as e:
         print(f"Error en trazabilidad de asesor: {e}")
+        raise HTTPException(status_code=500, detail=f"Error del servidor: {str(e)}")
+
+
+@router.get(
+    "/api/v1/seguimiento/global",
+    response_model=SeguimientoGlobalResponse,
+    status_code=200,
+    tags=["Seguimiento Asesor"],
+)
+def obtener_seguimiento_global(
+    sort_by: str = Query(
+        "prima_colocada",
+        description=(
+            "Criterio de orden: prima_colocada, polizas_emitidas, tasa_conversion, "
+            "dias_promedio_emision, leads_registrados, oportunidades_generadas, general"
+        ),
+    ),
+    order: str = Query("DESC", description="Dirección del orden: DESC o ASC"),
+    periodo: Optional[str] = Query(
+        None,
+        description="Filtro rápido: mensual (30d), trimestral (90d), anual (365d), historico_total",
+    ),
+    fecha_inicio: Optional[str] = Query(None, description="Rango desde (YYYY-MM-DD)"),
+    fecha_fin: Optional[str] = Query(None, description="Rango hasta (YYYY-MM-DD)"),
+    page: int = Query(0, ge=0, description="Índice de página (zero-based)"),
+    size: int = Query(20, ge=1, le=100, description="Cantidad de asesores por página"),
+    sf=Depends(get_salesforce_data),
+    auth_user: str = Depends(verifiy_auth),
+):
+    """
+    Ranking global de asesores: KPIs consolidados de toda la fuerza de
+    ventas, con ordenamiento dinámico y paginación.
+    """
+    print(f"Peticion recibida para ranking global de asesores: {auth_user}")
+
+    # ── Validar sort_by ───────────────────────────────────────────
+    if sort_by not in SORT_BY_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Valor inválido para 'sort_by': '{sort_by}'. "
+                f"Válidos: {', '.join(sorted(SORT_BY_VALIDOS))}"
+            ),
+        )
+
+    # ── Validar order ─────────────────────────────────────────────
+    order = order.upper()
+    if order not in ORDER_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Valor inválido para 'order': '{order}'. "
+                f"Válidos: {', '.join(sorted(ORDER_VALIDOS))}"
+            ),
+        )
+
+    # ── Validar periodo ───────────────────────────────────────────
+    if periodo and periodo not in PERIODO_VALIDOS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Valor inválido para 'periodo': '{periodo}'. "
+                f"Válidos: {', '.join(sorted(PERIODO_VALIDOS))}"
+            ),
+        )
+
+    # ── Validar formato de fechas ─────────────────────────────────
+    for nombre_campo, valor in (("fecha_inicio", fecha_inicio), ("fecha_fin", fecha_fin)):
+        if valor and not re.match(r"^\d{4}-\d{2}-\d{2}$", valor):
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{nombre_campo}' debe tener formato YYYY-MM-DD",
+            )
+
+    try:
+        resultado = obtener_ranking_global(
+            sf=sf,
+            sort_by=sort_by,
+            order=order,
+            periodo=periodo,
+            fecha_inicio=fecha_inicio,
+            fecha_fin=fecha_fin,
+            page=page,
+            size=size,
+        )
+        return resultado
+    except HTTPException as http_exc:
+        raise http_exc
+    except Exception as e:
+        print(f"Error en ranking global de asesores: {e}")
         raise HTTPException(status_code=500, detail=f"Error del servidor: {str(e)}")

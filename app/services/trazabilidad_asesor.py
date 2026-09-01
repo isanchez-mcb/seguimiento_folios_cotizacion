@@ -74,6 +74,7 @@ OPPORTUNITY_FIELDS = (
     "Duracion_en_etapa_Cotizacion__c, Duracion_en_etapa_Proceso_de_cierre__c, "
     "Responsable_decision__c, Tiempo_estimado__c, Impedimentos__c, "
     "Razon_de_perdida__c, Otra_razon_de_perdida__c, CloseDate, Probability, "
+    "Origen_de_oportunidad__c, "
     "CreatedDate, OwnerId, Owner.Name, LastModifiedDate, LastModifiedBy.Name"
 )
 
@@ -963,6 +964,351 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# ─── Capa 4.5: Producción del periodo vs. cohorte de creación ─────
+#
+# Distinción de negocio (Ajuste Técnico 2026-08-31):
+# - "Producción del periodo" = folios EMITIDOS cuyo Case.ClosedDate cae en
+#   el rango, sin importar cuándo se creó la Oportunidad que los originó
+#   (incluye "arrastre": oportunidades viejas cerradas este periodo).
+# - "Cohorte de creación" = Leads/Oportunidades cuyo propio CreatedDate
+#   cae en el rango, y cómo les fue (emitida en el mismo periodo, en
+#   proceso, o no emitida).
+#
+# Estos campos son ADITIVOS: conviven con resumen_ejecutivo/detalle_* de
+# calcular_kpis sin reemplazarlos ni modificarlos.
+
+def _resolver_rango_produccion(
+    fecha_inicio: Optional[str],
+    fecha_fin: Optional[str],
+    periodo: Optional[str],
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """fecha_inicio/fecha_fin tienen prioridad; si no vienen, se usa periodo (YYYY-MM[:YYYY-MM])."""
+    if fecha_inicio or fecha_fin:
+        inicio = None
+        fin = None
+        if fecha_inicio:
+            inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        if fecha_fin:
+            fin = datetime.strptime(fecha_fin, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
+        return inicio, fin
+
+    if periodo:
+        rango = _parsear_periodo(periodo)
+        if rango:
+            return rango
+
+    return None, None
+
+
+def calcular_produccion_periodo(
+    sf: Salesforce,
+    user_id: str,
+    fecha_inicio: Optional[str],
+    fecha_fin: Optional[str],
+    periodo: Optional[str],
+) -> Dict[str, Any]:
+    """
+    Producción real del periodo: folios emitidos cuyo Case.ClosedDate cae
+    en el rango, incluyendo "arrastre" (oportunidades creadas antes del
+    rango pero cerradas dentro de él).
+
+    Requiere una consulta adicional propia porque
+    consultar_oportunidades_por_asesor/consultar_oportunidades_en_lote
+    (las que ya usa el flujo principal) acotan por CreatedDate, así que
+    nunca traen una oportunidad vieja cuyo folio se cerró recientemente.
+    No modifica ni reutiliza el resultado de esas consultas.
+
+    Nota: a diferencia de resumen_ejecutivo/detalle_*, este cálculo no
+    aplica los filtros status_lead/stage_opp/ramo/con_folio — refleja
+    toda la producción cerrada del asesor en el rango.
+    """
+    query_opps = f"SELECT {OPPORTUNITY_FIELDS} FROM Opportunity WHERE OwnerId = '{user_id}'"
+    result_opps = query_con_reintento(sf, query_opps)
+    oportunidades = {r["Id"]: _limpiar_registro(r) for r in result_opps.get("records", [])}
+
+    opp_ids = list(oportunidades.keys())
+    folios_por_opp = consultar_folios_en_lote(sf, opp_ids)
+
+    # En lotes de _MAX_IDS_POR_LOTE para evitar "Error 431 Request Header
+    # Fields Too Large" (URL de Salesforce demasiado larga con muchos Ids),
+    # el mismo problema ya resuelto en consultar_oportunidades_en_lote /
+    # consultar_folios_en_lote / consultar_cuentas_en_lote.
+    leads = []
+    for i in range(0, len(opp_ids), _MAX_IDS_POR_LOTE):
+        lote_ids = opp_ids[i:i + _MAX_IDS_POR_LOTE]
+        ids_str = "', '".join(lote_ids)
+        query_leads = (
+            f"SELECT {LEAD_FIELDS} FROM Lead "
+            f"WHERE ConvertedOpportunityId IN ('{ids_str}')"
+        )
+        result_leads = query_con_reintento(sf, query_leads)
+        leads.extend(_limpiar_registro(r) for r in result_leads.get("records", []))
+
+    items = construir_items_unificada(leads, oportunidades, folios_por_opp, {})
+
+    inicio, fin = _resolver_rango_produccion(fecha_inicio, fecha_fin, periodo)
+
+    polizas_emitidas_total = 0
+    prima_colocada_total = 0.0
+    total_canceladas = 0
+    total_vigentes = 0
+    dias_emision = []
+    prima_por_ramo = {r: 0.0 for r in RAMOS_VALIDOS}
+    prospectos_nuevos = 0
+    cuentas_existentes = 0
+    emisiones_mismo_periodo = 0
+    emisiones_arrastre_pasado = 0
+
+    for item in items:
+        opp = item.get("oportunidad")
+        prospecto = item.get("prospecto")
+        origen_registro = item.get("origen_registro")
+        fecha_origen = None
+        if origen_registro == "PROSPECTO_CONVERTIDO" and prospecto:
+            fecha_origen = _parsear_fecha(prospecto.get("created_date"))
+        elif opp:
+            fecha_origen = _parsear_fecha(opp.get("created_date"))
+
+        opp_creada_en_rango = False
+        if fecha_origen:
+            opp_creada_en_rango = not ((inicio and fecha_origen < inicio) or (fin and fecha_origen > fin))
+
+        for folio in item.get("folios_emision", []):
+            if not folio.get("poliza_emitida"):
+                continue
+
+            fecha_cierre = _parsear_fecha(folio.get("closed_date"))
+            if fecha_cierre is None:
+                continue
+            if inicio and fecha_cierre < inicio:
+                continue
+            if fin and fecha_cierre > fin:
+                continue
+
+            polizas_emitidas_total += 1
+            monto = folio.get("poliza_prima_total") or 0.0
+            prima_colocada_total += monto
+
+            ramo = folio.get("ramo")
+            if ramo in prima_por_ramo:
+                prima_por_ramo[ramo] += monto
+
+            status = (folio.get("poliza_status") or "").strip().lower()
+            if status == "cancelado":
+                total_canceladas += 1
+            elif status == "vigente":
+                total_vigentes += 1
+
+            # Composición por origen del registro (Lead vs. Cuenta existente).
+            if origen_registro == "PROSPECTO_CONVERTIDO":
+                prospectos_nuevos += 1
+            else:
+                cuentas_existentes += 1
+
+            # Composición por inmediatez: la oportunidad nació en el mismo
+            # rango que se está consultando, o viene de un periodo pasado.
+            if opp_creada_en_rango:
+                emisiones_mismo_periodo += 1
+            else:
+                emisiones_arrastre_pasado += 1
+
+            if fecha_origen and fecha_cierre:
+                dias = (fecha_cierre - fecha_origen).days
+                if dias >= 0:
+                    dias_emision.append(dias)
+
+    dias_promedio_emision = round(sum(dias_emision) / len(dias_emision), 1) if dias_emision else None
+    ticket_promedio_prima = (
+        round(prima_colocada_total / polizas_emitidas_total, 2) if polizas_emitidas_total else 0.0
+    )
+
+    distribucion_ramo_emisiones = [
+        {
+            "ramo": ramo,
+            "monto": round(monto, 2),
+            "porcentaje": round(monto / prima_colocada_total * 100, 2) if prima_colocada_total else 0.0,
+        }
+        for ramo, monto in prima_por_ramo.items()
+    ]
+
+    return {
+        "polizas_emitidas_total": polizas_emitidas_total,
+        "prima_colocada_total": round(prima_colocada_total, 2),
+        "dias_promedio_emision": dias_promedio_emision,
+        "total_canceladas": total_canceladas,
+        "total_vigentes": total_vigentes,
+        "ticket_promedio_prima": ticket_promedio_prima,
+        "composicion_origen_emisiones": {
+            "prospectos_nuevos": prospectos_nuevos,
+            "cuentas_existentes": cuentas_existentes,
+            "pct_origen_prospectos": (
+                round(prospectos_nuevos / polizas_emitidas_total * 100, 2) if polizas_emitidas_total else 0.0
+            ),
+            "pct_origen_cuentas_existentes": (
+                round(cuentas_existentes / polizas_emitidas_total * 100, 2) if polizas_emitidas_total else 0.0
+            ),
+        },
+        "composicion_inmediatez_emisiones": {
+            "mismo_periodo": emisiones_mismo_periodo,
+            "arrastre_pasado": emisiones_arrastre_pasado,
+            "pct_mismo_periodo": (
+                round(emisiones_mismo_periodo / polizas_emitidas_total * 100, 2) if polizas_emitidas_total else 0.0
+            ),
+            "pct_arrastre_pasado": (
+                round(emisiones_arrastre_pasado / polizas_emitidas_total * 100, 2) if polizas_emitidas_total else 0.0
+            ),
+        },
+        "distribucion_ramo_emisiones": distribucion_ramo_emisiones,
+    }
+
+
+def _resolver_origen_item(item: Dict[str, Any]) -> str:
+    """
+    Origen_de_oportunidad__c si el item tiene oportunidad, LeadSource si
+    no. 'Sin identificar' si el campo aplicable viene vacío. Duplicado a
+    propósito de ranking_asesores.py (mismo criterio) para no crear una
+    dependencia cruzada entre ambos módulos.
+    """
+    opp = item.get("oportunidad")
+    if opp:
+        origen = opp.get("origen_oportunidad")
+    else:
+        prospecto = item.get("prospecto") or {}
+        origen = prospecto.get("lead_source")
+    return origen or "Sin identificar"
+
+
+def calcular_metricas_cohorte(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Métricas de cohorte y eficiencia sobre los items YA acotados por la
+    consulta principal (Lead/Opportunity con CreatedDate en el rango
+    solicitado, más los filtros status_lead/stage_opp/ramo/con_folio ya
+    aplicados). No requiere una consulta adicional: solo clasifica el
+    resultado de cada oportunidad ya traída, según si su folio se emitió
+    (o no) dentro del mismo rango con el que se trajo esa oportunidad.
+
+    Nota: si el filtro usado es 'periodo' (no fecha_inicio/fecha_fin), los
+    items ya vienen acotados por filtrar_por_periodo, cuya regla de
+    inclusión es "cualquier fecha del Lead/Oportunidad/Folio en el
+    periodo" — por lo que 'oportunidades_generadas' aquí podría incluir
+    alguna oportunidad cuyo propio CreatedDate no esté en el periodo pero
+    sí lo esté, por ejemplo, la fecha de su folio. Con fecha_inicio/
+    fecha_fin explícitos (el caso principal) esto no ocurre, porque ahí sí
+    se acota directamente por CreatedDate en la consulta SOQL.
+    """
+    leads_registrados = 0
+    convertidos = 0
+    oportunidades_generadas = 0
+    emisiones_mismo_periodo = 0
+    emisiones_provenientes_de_lead = 0
+    oportunidades_no_emitidas = 0
+    oportunidades_en_proceso = 0
+    monto_total_cotizado = 0.0
+    origenes: Dict[str, Dict[str, int]] = {}
+
+    for item in items:
+        prospecto = item.get("prospecto")
+        if prospecto is not None:
+            leads_registrados += 1
+            if prospecto.get("is_converted"):
+                convertidos += 1
+
+        opp = item.get("oportunidad")
+        origen_registro = item.get("origen_registro")
+
+        # distribucion_origen: un origen por item (oportunidad, o
+        # prospecto sin oportunidad); 'emitidas' se completa abajo.
+        origen_item = None
+        if opp or (prospecto is not None and opp is None):
+            origen_item = _resolver_origen_item(item)
+            origenes.setdefault(origen_item, {"total": 0, "emitidas": 0})
+            origenes[origen_item]["total"] += 1
+
+        tiene_emitida = False
+        if opp:
+            oportunidades_generadas += 1
+            monto_total_cotizado += opp.get("prima_total_cotizada") or 0.0
+
+            # Doble señal: por folio (Case.Poliza_emitida__c/Poliza_no_emitida__c)
+            # y por StageName de la propia oportunidad. Algunas oportunidades
+            # "Póliza no emitida" nunca llegan a tener un Case asociado (se
+            # descartan antes de generar folio), así que depender solo del
+            # folio subcuenta esos casos como "en proceso" incorrectamente.
+            stage = (opp.get("stage_name") or "").strip().lower()
+            tiene_emitida = stage == "póliza emitida"
+            tiene_no_emitida = stage == "póliza no emitida"
+
+            for folio in item.get("folios_emision", []):
+                if folio.get("poliza_emitida"):
+                    tiene_emitida = True
+                elif folio.get("poliza_no_emitida"):
+                    tiene_no_emitida = True
+
+            if tiene_emitida:
+                emisiones_mismo_periodo += 1
+                if origen_registro == "PROSPECTO_CONVERTIDO":
+                    emisiones_provenientes_de_lead += 1
+            elif tiene_no_emitida:
+                oportunidades_no_emitidas += 1
+            else:
+                oportunidades_en_proceso += 1
+
+        if origen_item is not None and tiene_emitida:
+            origenes[origen_item]["emitidas"] += 1
+
+    # EJE A: Prospección (Leads Nuevos) — sobre leads_registrados.
+    tasa_conversion_prospecto_pct = round(convertidos / leads_registrados * 100, 2) if leads_registrados else 0.0
+    tasa_cierre_prospeccion_pct = (
+        round(emisiones_provenientes_de_lead / leads_registrados * 100, 2) if leads_registrados else 0.0
+    )
+
+    # EJE B: Eficiencia Comercial (Oportunidades Totales) — sobre oportunidades_generadas.
+    # No se mide oportunidades/leads: la mayoría de las oportunidades no
+    # nacen de un Lead, esa relación distorsiona la lectura comercial.
+    tasa_cierre_oportunidad_pct = (
+        round(emisiones_mismo_periodo / oportunidades_generadas * 100, 2) if oportunidades_generadas else 0.0
+    )
+    tasa_oportunidades_perdidas_pct = (
+        round(oportunidades_no_emitidas / oportunidades_generadas * 100, 2) if oportunidades_generadas else 0.0
+    )
+
+    total_origenes = sum(datos["total"] for datos in origenes.values())
+    distribucion_origen = [
+        {
+            "origen": origen,
+            "total": datos["total"],
+            "porcentaje": round(datos["total"] / total_origenes * 100, 2) if total_origenes else 0.0,
+            "emitidas": datos["emitidas"],
+            "porcentaje_emitidas": round(datos["emitidas"] / datos["total"] * 100, 2) if datos["total"] else 0.0,
+        }
+        for origen, datos in sorted(origenes.items(), key=lambda x: x[1]["total"], reverse=True)
+    ]
+
+    return {
+        "distribucion_origen": distribucion_origen,
+        "gestion_cohorte_creacion": {
+            "leads_registrados": leads_registrados,
+            "oportunidades_generadas": oportunidades_generadas,
+            "emisiones_mismo_periodo": emisiones_mismo_periodo,
+            "oportunidades_en_proceso": oportunidades_en_proceso,
+            "oportunidades_no_emitidas": oportunidades_no_emitidas,
+        },
+        "eficiencia_prospeccion": {
+            "tasa_conversion_prospecto_pct": tasa_conversion_prospecto_pct,
+            "tasa_cierre_prospeccion_pct": tasa_cierre_prospeccion_pct,
+        },
+        "eficiencia_comercial": {
+            "tasa_cierre_oportunidad_pct": tasa_cierre_oportunidad_pct,
+            "tasa_oportunidades_perdidas_pct": tasa_oportunidades_perdidas_pct,
+        },
+        "metrica_financiera_cohorte": {
+            "monto_total_cotizado": round(monto_total_cotizado, 2),
+        },
+    }
+
+
 # ─── Capa 5: Filtro por periodo ───────────────────────────────────
 
 def _parsear_periodo(periodo: str) -> Optional[Tuple[datetime, datetime]]:
@@ -1128,6 +1474,8 @@ def obtener_trazabilidad_asesor(
     9. Filtra por stage_opp (solo oportunidades) si aplica.
     10. Filtra por con_folio (solo items con folios de emisión) si aplica.
     11. Calcula KPIs sobre el total filtrado.
+    11.5. Calcula producción del periodo (con arrastre, consulta aparte) y
+          métricas de cohorte/eficiencia (aditivo, no reemplaza el paso 11).
     12. Calcula la fecha mínima de registro.
     13. Pagina en memoria.
 
@@ -1221,6 +1569,33 @@ def obtener_trazabilidad_asesor(
     # ── 11. Calcular KPIs sobre el total filtrado ────────────────
     kpis = calcular_kpis(items)
 
+    # ── 11.5. Producción del periodo vs. cohorte (aditivo) ────────
+    # No reemplaza nada de kpis; agrega la distinción producción/cohorte.
+    metricas_cohorte = calcular_metricas_cohorte(items)
+
+    # Mezcla de venta / origen de oportunidades (EJE B): usa el desglose
+    # cuentas_existentes/prospectos que ya calcula calcular_kpis sobre los
+    # mismos items, expresado como % de oportunidades_generadas.
+    origen_oportunidades = kpis["detalle_oportunidades"]["origen"]
+    oportunidades_generadas_cohorte = metricas_cohorte["gestion_cohorte_creacion"]["oportunidades_generadas"]
+    metricas_cohorte["eficiencia_comercial"]["pct_origen_cuentas_existentes"] = (
+        round(origen_oportunidades["cuentas_existentes"] / oportunidades_generadas_cohorte * 100, 2)
+        if oportunidades_generadas_cohorte else 0.0
+    )
+    metricas_cohorte["eficiencia_comercial"]["pct_origen_prospectos"] = (
+        round(origen_oportunidades["prospectos"] / oportunidades_generadas_cohorte * 100, 2)
+        if oportunidades_generadas_cohorte else 0.0
+    )
+
+    produccion_periodo_cierre = None
+    if user_id:
+        try:
+            produccion_periodo_cierre = calcular_produccion_periodo(
+                sf, user_id, fecha_inicio, fecha_fin, periodo
+            )
+        except Exception as e:
+            print(f"Error al calcular producción del periodo para {numero_asesor}: {e}")
+
     # ── 12. Calcular fecha mínima de registro ────────────────────
     # Considera la fecha de creación más antigua entre prospectos,
     # oportunidades y folios.
@@ -1258,6 +1633,12 @@ def obtener_trazabilidad_asesor(
             "detalle_oportunidades": kpis["detalle_oportunidades"],
             "detalle_folios_tramite": kpis["detalle_folios_tramite"],
             "detalle_ramos": kpis["detalle_ramos"],
+            "produccion_periodo_cierre": produccion_periodo_cierre,
+            "gestion_cohorte_creacion": metricas_cohorte["gestion_cohorte_creacion"],
+            "eficiencia_prospeccion": metricas_cohorte["eficiencia_prospeccion"],
+            "eficiencia_comercial": metricas_cohorte["eficiencia_comercial"],
+            "metrica_financiera_cohorte": metricas_cohorte["metrica_financiera_cohorte"],
+            "distribucion_origen": metricas_cohorte["distribucion_origen"],
             "pagination": {
                 "page": page,
                 "size": size,

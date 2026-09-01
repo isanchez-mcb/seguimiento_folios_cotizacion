@@ -305,6 +305,92 @@ class FiltrosAplicados(BaseModel):
     con_folio: Optional[bool] = None
 
 
+class DistribucionOrigenItem(BaseModel):
+    origen: str
+    total: int = 0
+    porcentaje: float = 0.0
+    emitidas: int = 0
+    porcentaje_emitidas: float = 0.0
+
+
+class ComposicionOrigenEmisiones(BaseModel):
+    """De las pólizas emitidas del periodo, cuántas vienen de un Lead vs. de una Cuenta existente."""
+    prospectos_nuevos: int = 0
+    cuentas_existentes: int = 0
+    pct_origen_prospectos: float = 0.0
+    pct_origen_cuentas_existentes: float = 0.0
+
+
+class ComposicionInmediatezEmisiones(BaseModel):
+    """De las pólizas emitidas del periodo, cuántas nacieron de una oportunidad del mismo periodo vs. de arrastre."""
+    mismo_periodo: int = 0
+    arrastre_pasado: int = 0
+    pct_mismo_periodo: float = 0.0
+    pct_arrastre_pasado: float = 0.0
+
+
+class DistribucionRamoEmision(BaseModel):
+    ramo: str
+    monto: float = 0.0
+    porcentaje: float = 0.0
+
+
+class ProduccionPeriodoCierre(BaseModel):
+    """
+    Producción real del periodo (arrastre + del mes): folios emitidos
+    cuyo Case.ClosedDate cae en el rango, sin importar cuándo se creó la
+    oportunidad que los originó.
+    """
+    polizas_emitidas_total: int = 0
+    prima_colocada_total: float = 0.0
+    dias_promedio_emision: Optional[float] = None
+    total_canceladas: int = 0
+    total_vigentes: int = 0
+    ticket_promedio_prima: Optional[float] = None
+    composicion_origen_emisiones: Optional[ComposicionOrigenEmisiones] = None
+    composicion_inmediatez_emisiones: Optional[ComposicionInmediatezEmisiones] = None
+    distribucion_ramo_emisiones: List[DistribucionRamoEmision] = []
+
+
+class GestionCohorteCreacion(BaseModel):
+    """Leads/Oportunidades cuyo propio CreatedDate cae en el rango, y su resultado."""
+    leads_registrados: int = 0
+    oportunidades_generadas: int = 0
+    emisiones_mismo_periodo: int = 0
+    oportunidades_en_proceso: int = 0
+    oportunidades_no_emitidas: int = 0
+
+
+class EficienciaConversion(BaseModel):
+    tasa_conversion_prospecto_pct: float = 0.0
+    tasa_prospecto_oportunidad_pct: float = 0.0
+    tasa_cierre_oportunidad_pct: float = 0.0
+
+
+class EficienciaProspeccion(BaseModel):
+    """
+    EJE A: Prospección (Leads Nuevos) — sobre leads_registrados.
+    """
+    tasa_conversion_prospecto_pct: float = 0.0
+    tasa_cierre_prospeccion_pct: float = 0.0
+
+
+class EficienciaComercial(BaseModel):
+    """
+    EJE B: Eficiencia Comercial (Oportunidades Totales) — sobre
+    oportunidades_generadas. No mide oportunidades/leads: la mayoría de
+    las oportunidades no nacen de un Lead.
+    """
+    tasa_cierre_oportunidad_pct: float = 0.0
+    tasa_oportunidades_perdidas_pct: float = 0.0
+    pct_origen_cuentas_existentes: float = 0.0
+    pct_origen_prospectos: float = 0.0
+
+
+class MetricaFinancieraCohorte(BaseModel):
+    monto_total_cotizado: float = 0.0
+
+
 class Meta(BaseModel):
     numero_asesor: str
     nombre_asesor: Optional[str] = None
@@ -314,6 +400,12 @@ class Meta(BaseModel):
     detalle_oportunidades: DetalleOportunidades
     detalle_folios_tramite: DetalleFoliosTramite
     detalle_ramos: DetalleRamos
+    produccion_periodo_cierre: Optional[ProduccionPeriodoCierre] = None
+    gestion_cohorte_creacion: GestionCohorteCreacion
+    eficiencia_prospeccion: EficienciaProspeccion
+    eficiencia_comercial: EficienciaComercial
+    metrica_financiera_cohorte: MetricaFinancieraCohorte
+    distribucion_origen: List[DistribucionOrigenItem] = []
     pagination: Pagination
     filtros_aplicados: FiltrosAplicados
 
@@ -322,4 +414,121 @@ class SeguimientoAsesorResponse(BaseModel):
     status: str = "success"
     meta: Meta
     items: List[ItemSeguimiento]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Módulo de Ranking Global de Asesores (Agente Lucía)
+# ═══════════════════════════════════════════════════════════════════
+
+class VendedorInfo(BaseModel):
+    numero_asesor: str
+    nombre_asesor: Optional[str] = None
+    zona: Optional[str] = None
+    puesto: Optional[str] = None
+
+
+class MetricasOperativasRanking(BaseModel):
+    leads_registrados: int = 0
+    cotizaciones_generadas: int = 0
+    oportunidades_generadas: int = 0
+    polizas_emitidas: int = 0
+    prima_colocada_total: float = 0.0
+    dias_promedio_emision: Optional[float] = None
+    tasa_conversion_prospecto_pct: float = 0.0
+
+
+class DesgloseRamoMonto(BaseModel):
+    ramo: str
+    monto: float = 0.0
+
+
+class MetricaFinancieraRanking(BaseModel):
+    monto_total_cotizado: float = 0.0
+    monto_total_emitido: float = 0.0
+
+
+class ItemRanking(BaseModel):
+    """
+    Leaderboard plano: solo lo necesario para ordenar/mostrar la tabla de
+    ranking. El detalle analítico (desglose por ramo, origen, producción
+    vs. cohorte) se consulta por separado vía /api/v1/seguimiento/asesor.
+    """
+    posicion_ranking: int
+    vendedor: VendedorInfo
+    metricas_operativas: MetricasOperativasRanking
+
+
+class TotalesOperativosGlobal(BaseModel):
+    total_asesores_evaluados: int = 0
+    leads_registrados: int = 0
+    cotizaciones_generadas: int = 0
+    polizas_emitidas: int = 0
+    prima_colocada_total: float = 0.0
+
+
+class DistribucionPuestoItem(BaseModel):
+    puesto: str
+    total: int = 0
+    porcentaje: float = 0.0
+    emitidas: int = 0
+    porcentaje_emitidas: float = 0.0
+    emitidas_mismo_periodo: int = 0
+    emitidas_arrastre_pasado: int = 0
+
+
+class EficienciaGlobal(BaseModel):
+    tasa_conversion_global_pct: float = 0.0
+    dias_promedio_emision_global: Optional[float] = None
+    distribucion_origen: List[DistribucionOrigenItem] = []
+    distribucion_puesto: List[DistribucionPuestoItem] = []
+
+
+class PrimaRamoGlobal(BaseModel):
+    ramo: str
+    monto_emitido: float = 0.0
+    porcentaje: float = 0.0
+
+
+class ResumenGeneralEmpresa(BaseModel):
+    """
+    Homologado con Meta (endpoint por-asesor): producción del periodo,
+    gestión de cohorte y eficiencia separada en dos ejes. La distribución
+    de prima por ramo vive en produccion_periodo_cierre.distribucion_ramo_emisiones
+    (ya no hay un prima_por_ramo_global separado — era el mismo dato).
+    """
+    totales_operativos: TotalesOperativosGlobal
+    eficiencia_global: EficienciaGlobal
+    produccion_periodo_cierre: ProduccionPeriodoCierre
+    gestion_cohorte_creacion: GestionCohorteCreacion
+    eficiencia_prospeccion: EficienciaProspeccion
+    eficiencia_comercial: EficienciaComercial
+    metrica_financiera: MetricaFinancieraRanking
+
+
+class PaginationGlobal(BaseModel):
+    page: int = 0
+    size: int = 20
+    total_pages: int = 0
+    total_records: int = 0
+
+
+class FiltrosAplicadosGlobal(BaseModel):
+    sort_by: str
+    order: str
+    periodo: Optional[str] = None
+    fecha_inicio: Optional[str] = None
+    fecha_fin: Optional[str] = None
+
+
+class MetaGlobal(BaseModel):
+    fecha_generacion: str
+    resumen_general_empresa: ResumenGeneralEmpresa
+    pagination: PaginationGlobal
+    filtros_aplicados: FiltrosAplicadosGlobal
+
+
+class SeguimientoGlobalResponse(BaseModel):
+    status: str = "success"
+    meta: MetaGlobal
+    items: List[ItemRanking]
 
