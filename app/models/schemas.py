@@ -518,6 +518,8 @@ class FiltrosAplicadosGlobal(BaseModel):
     periodo: Optional[str] = None
     fecha_inicio: Optional[str] = None
     fecha_fin: Optional[str] = None
+    ramo: Optional[List[str]] = None
+    puesto: Optional[List[str]] = None
 
 
 class MetaGlobal(BaseModel):

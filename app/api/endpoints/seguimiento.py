@@ -158,6 +158,14 @@ def obtener_seguimiento_global(
     ),
     fecha_inicio: Optional[str] = Query(None, description="Rango desde (YYYY-MM-DD)"),
     fecha_fin: Optional[str] = Query(None, description="Rango hasta (YYYY-MM-DD)"),
+    ramo: Optional[str] = Query(
+        None,
+        description="Filtra por ramo(s), separados por coma. Válidos: VIDA, DAÑOS, ACCIDENTES Y ENFERMEDADES",
+    ),
+    puesto: Optional[str] = Query(
+        None,
+        description="Filtra por puesto(s) del asesor (Asesor_externo__c.Puesto__c), separados por coma",
+    ),
     page: int = Query(0, ge=0, description="Índice de página (zero-based)"),
     size: int = Query(20, ge=1, le=100, description="Cantidad de asesores por página"),
     sf=Depends(get_salesforce_data),
@@ -208,6 +216,22 @@ def obtener_seguimiento_global(
                 detail=f"'{nombre_campo}' debe tener formato YYYY-MM-DD",
             )
 
+    # ── Validar ramo (uno o varios, separados por coma) ────────────
+    ramos_lista = [r.strip() for r in ramo.split(",") if r.strip()] if ramo else None
+    if ramos_lista:
+        invalidos = [r for r in ramos_lista if r not in RAMOS_VALIDOS]
+        if invalidos:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Valor inválido para 'ramo': {', '.join(invalidos)}. "
+                    f"Válidos: {', '.join(sorted(RAMOS_VALIDOS))}"
+                ),
+            )
+
+    # ── Puesto: uno o varios, separados por coma (sin catálogo fijo) ─
+    puestos_lista = [p.strip() for p in puesto.split(",") if p.strip()] if puesto else None
+
     try:
         resultado = obtener_ranking_global(
             sf=sf,
@@ -216,6 +240,8 @@ def obtener_seguimiento_global(
             periodo=periodo,
             fecha_inicio=fecha_inicio,
             fecha_fin=fecha_fin,
+            ramo=ramos_lista,
+            puesto=puestos_lista,
             page=page,
             size=size,
         )

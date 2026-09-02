@@ -31,6 +31,7 @@ La URL base depende del entorno donde esté desplegado el servicio (sandbox/prod
 | `numero_asesor` | string | **Sí** | — | Número del asesor (coincide con el `Alias` del `User` en Salesforce, o con `Numero_de_asesor__c` en `Asesor_externo__c` si no tiene usuario activo). No puede ir vacío. |
 | `status_lead` | string | No | `Nuevo`, `Stand by`, `Convertido`, `No convertido` | Filtra los prospectos por su `Status` exacto en Salesforce. **Importante:** ver sección 4, cambia el universo de oportunidades que se consultan. |
 | `stage_opp` | string | No | `Nueva`, `Cotización`, `Proceso de cierre`, `Cerrado ganado`, `Póliza emitida`, `Póliza no emitida`, `Concluido`, `Otros` | Filtra por la etapa (`StageName`) de la oportunidad. `Otros` es un valor especial: no existe como tal en Salesforce, agrupa cualquier etapa que no esté en la lista anterior (etapas inactivas o de versiones anteriores del negocio). |
+| `ramo` | string | No | `VIDA`, `DAÑOS`, `ACCIDENTES Y ENFERMEDADES` | Filtra items donde el prospecto (`Ramos_de_interes__c`), la oportunidad (`Ramos_de_interes__c`) o algún folio (`Ramo__c`) coincida con el ramo pedido. Un solo valor (no admite lista separada por coma en este endpoint). |
 | `fecha_inicio` | string (`YYYY-MM-DD`) | No | — | Filtra registros con `CreatedDate >=` esta fecha. Se aplica en la consulta a Salesforce sobre Leads y Oportunidades (no sobre folios). |
 | `fecha_fin` | string (`YYYY-MM-DD`) | No | — | Filtra registros con `CreatedDate <=` esta fecha. Misma lógica que `fecha_inicio`. |
 | `periodo` | string | No | `YYYY-MM` o `YYYY-MM:YYYY-MM` (rango) | Filtro alterno de fecha, aplicado **después** de traer los datos. Incluye un registro si el Lead, la Oportunidad **o alguna Póliza/Folio** fue creado dentro del periodo. Es independiente de `fecha_inicio`/`fecha_fin` — puedes usar uno u otro según si necesitas rango exacto (`fecha_inicio`/`fecha_fin`) o mes calendario con cobertura de folios (`periodo`). |
@@ -38,7 +39,7 @@ La URL base depende del entorno donde esté desplegado el servicio (sandbox/prod
 | `page` | int | No | `>= 0` (por defecto `0`) | Índice de página, base cero. |
 | `size` | int | No | `1` a `100` (por defecto `10`) | Cantidad de registros por página. |
 
-Valores inválidos en `status_lead` o `stage_opp` devuelven `400 Bad Request` con el detalle de los valores permitidos.
+Valores inválidos en `status_lead`, `stage_opp` o `ramo` devuelven `400 Bad Request` con el detalle de los valores permitidos.
 
 ---
 
@@ -63,6 +64,13 @@ Valores inválidos en `status_lead` o `stage_opp` devuelven `400 Bad Request` co
     "detalle_prospeccion": { ... },
     "detalle_oportunidades": { ... },
     "detalle_folios_tramite": { ... },
+    "detalle_ramos": { ... },
+    "produccion_periodo_cierre": { ... },
+    "gestion_cohorte_creacion": { ... },
+    "eficiencia_prospeccion": { ... },
+    "eficiencia_comercial": { ... },
+    "metrica_financiera_cohorte": { ... },
+    "distribucion_origen": [ { ... } ],
     "pagination": { ... },
     "filtros_aplicados": { ... }
   },
@@ -131,6 +139,86 @@ Valores inválidos en `status_lead` o `stage_opp` devuelven `400 Bad Request` co
 | `en_proceso` | Folios en trámite, que no han concluido ni en emisión ni en no-emisión. |
 | `no_emitidos` | Folios que concluyeron sin emitirse. |
 
+#### `detalle_ramos`
+
+Desglose de prospectos, oportunidades y folios por ramo (`VIDA`, `DAÑOS`, `ACCIDENTES Y ENFERMEDADES`; los folios además por sub-ramo). Como no existen valores fuera de estos catálogos, lo que cae en `sin_ramo`/`sin_sub_ramo` es un campo vacío/no capturado — sirve para medir qué tan bien se está trazando el dato, no solo para agrupar.
+
+| Campo | Significado |
+|---|---|
+| `prospectos.<RAMO>` / `.sin_ramo` | Prospectos por `Ramos_de_interes__c` del Lead. |
+| `oportunidades.<RAMO>` / `.sin_ramo` | Oportunidades por `Ramos_de_interes__c` de la Opportunity. |
+| `folios.ramo.<RAMO>` / `.sin_ramo` | Folios por `Ramo__c` del Case. |
+| `folios.sub_ramo.<SUB_RAMO>` / `.sin_sub_ramo` | Folios por `Sub_ramos__c` del Case (`GASTOS MÉDICOS MAYORES`, `VIDA INDIVIDUAL`, `VIDA GRUPO`, `HOGAR`, `AUTOMÓVILES`). |
+
+#### `produccion_periodo_cierre`
+
+**Producción real del periodo**: folios **emitidos** cuyo `Case.ClosedDate` cae en el rango consultado, sin importar cuándo se creó la oportunidad que los originó — incluye "arrastre" (negociaciones de meses anteriores que cerraron ahora). Es `null` si no se pudo resolver el `User` de Salesforce del asesor (requiere una consulta adicional propia; ver nota más abajo).
+
+| Campo | Significado |
+|---|---|
+| `polizas_emitidas_total` | Folios emitidos cuyo `ClosedDate` cae en el rango. |
+| `prima_colocada_total` | Suma de la prima de esos folios. |
+| `dias_promedio_emision` | Promedio de días entre el origen (creación del Lead si viene de prospecto, o de la Opportunity si es venta directa) y el `ClosedDate` del folio. `null` si no hay folios emitidos. |
+| `total_canceladas` / `total_vigentes` | De esos folios emitidos, cuántas pólizas están en status `Cancelado` / `Vigente`. |
+| `ticket_promedio_prima` | Prima promedio por cada póliza emitida en la producción del periodo (`prima_colocada_total / polizas_emitidas_total`). |
+| `composicion_origen_emisiones.prospectos_nuevos` / `.cuentas_existentes` | De los folios emitidos del periodo, cuántos vienen de un Lead convertido vs. de una cuenta existente (venta directa). |
+| `composicion_origen_emisiones.pct_origen_prospectos` | Porcentaje de pólizas emitidas del periodo que vinieron de prospectos nuevos. |
+| `composicion_origen_emisiones.pct_origen_cuentas_existentes` | Porcentaje de pólizas emitidas del periodo que vinieron de cuentas existentes. |
+| `composicion_inmediatez_emisiones.mismo_periodo` / `.arrastre_pasado` | De los folios emitidos del periodo, cuántos vienen de una oportunidad **creada en ese mismo rango** vs. de una oportunidad de un periodo anterior (arrastre). |
+| `composicion_inmediatez_emisiones.pct_mismo_periodo` | Porcentaje de emisiones del periodo negociadas en este mismo mes. |
+| `composicion_inmediatez_emisiones.pct_arrastre_pasado` | Porcentaje de emisiones del periodo negociadas en meses pasados. |
+| `distribucion_ramo_emisiones` | Mezcla porcentual de la prima emitida de caja distribuida por ramo — lista de `{ ramo, monto, porcentaje }` sobre `prima_colocada_total`. |
+
+> Nota: a diferencia de `resumen_ejecutivo`/`detalle_*`, este bloque **no** aplica los filtros `status_lead`/`stage_opp`/`ramo`/`con_folio` — refleja toda la producción cerrada del asesor en el rango de fechas, porque requiere una consulta adicional sin acotar por `CreatedDate` (para no perder el arrastre).
+
+#### `gestion_cohorte_creacion`
+
+Seguimiento operativo del volumen creado en el periodo: Leads/Oportunidades cuyo propio `CreatedDate` cae en el rango, y qué tan bien les fue.
+
+| Campo | Significado |
+|---|---|
+| `leads_registrados` | Prospectos creados en el rango (mismo valor que `total_prospectos` cuando no hay otros filtros). |
+| `oportunidades_generadas` | Oportunidades creadas en el rango (vengan o no de un Lead). |
+| `emisiones_mismo_periodo` | De esas oportunidades, cuántas ya tienen un folio emitido **cuyo `ClosedDate` también cae en el rango**. Si la oportunidad se creó en el rango pero su folio cerró después, sigue "en proceso" al momento de esta consulta. |
+| `oportunidades_en_proceso` | Oportunidades del cohorte que no tienen folio emitido ni marcado como no emitido todavía. |
+| `oportunidades_no_emitidas` | Oportunidades del cohorte marcadas como no emitidas (por `StageName = "Póliza no emitida"` o por el folio; algunas de estas oportunidades nunca llegan a tener un `Case` asociado). |
+
+#### `eficiencia_prospeccion` (Eje A — sobre `leads_registrados`)
+
+| Campo | Significado |
+|---|---|
+| `tasa_conversion_prospecto_pct` | Porcentaje de leads registrados que fueron convertidos a Cuenta/Oportunidad. |
+| `tasa_cierre_prospeccion_pct` | Porcentaje de leads registrados que llegaron hasta póliza emitida. |
+
+#### `eficiencia_comercial` (Eje B — sobre `oportunidades_generadas`)
+
+No mide oportunidades contra leads: la mayoría de las oportunidades nacen de cuentas existentes, no de un Lead, así que esa relación distorsionaría la lectura comercial.
+
+| Campo | Significado |
+|---|---|
+| `tasa_cierre_oportunidad_pct` | Porcentaje de éxito/cierre sobre todas las oportunidades creadas en el periodo. |
+| `tasa_oportunidades_perdidas_pct` | Porcentaje de oportunidades creadas en el periodo que se marcaron como no emitidas. |
+| `pct_origen_cuentas_existentes` | Porcentaje de las oportunidades del periodo que provinieron de la cartera/cuentas existentes. |
+| `pct_origen_prospectos` | Porcentaje de las oportunidades del periodo que provinieron de la prospección nueva. |
+
+#### `metrica_financiera_cohorte`
+
+| Campo | Significado |
+|---|---|
+| `monto_total_cotizado` | Suma de `prima_total_cotizada` de las oportunidades del resultado filtrado (mismo criterio que `resumen_ejecutivo.metrica_financiera.monto_total_cotizado`, expuesto aquí junto al resto de los bloques de cohorte/eficiencia). |
+
+#### `distribucion_origen`
+
+Desglose por canal de origen (`Origen_de_oportunidad__c` de la oportunidad, o `LeadSource` del prospecto si no hay oportunidad) de los registros del cohorte — `"Sin identificar"` agrupa los que no traen ese dato.
+
+| Campo | Significado |
+|---|---|
+| `origen` | Nombre del canal (`Sitio web`, `WhatsApp`, `Llamada Entrante`, etc.), o `"Sin identificar"`. |
+| `total` | Cuántos registros del cohorte tienen ese origen. |
+| `porcentaje` | `total` como porcentaje de todos los registros con origen resuelto. |
+| `emitidas` | De esos, cuántos ya tienen un folio emitido en el mismo periodo (mismo criterio que `gestion_cohorte_creacion.emisiones_mismo_periodo`). |
+| `porcentaje_emitidas` | `emitidas` como porcentaje de `total` **dentro de ese mismo origen** (no contra el total general). |
+
 #### `pagination`
 
 | Campo | Significado |
@@ -142,7 +230,7 @@ Valores inválidos en `status_lead` o `stage_opp` devuelven `400 Bad Request` co
 
 #### `filtros_aplicados`
 
-Eco de los filtros recibidos en la request (`status_lead`, `stage_opp`, `fecha_inicio`, `fecha_fin`, `periodo`, `con_folio`), útil para que el frontend confirme qué se aplicó realmente.
+Eco de los filtros recibidos en la request (`status_lead`, `stage_opp`, `ramo`, `fecha_inicio`, `fecha_fin`, `periodo`, `con_folio`), útil para que el frontend confirme qué se aplicó realmente.
 
 ---
 
@@ -314,8 +402,39 @@ Respuesta (resumida):
       "etapas": { "poliza_emitida": 10, "poliza_no_emitida": 18, "cerrado_ganado": 5, "cotizacion": 23, "otros": 0 }
     },
     "detalle_folios_tramite": { "total_folios": 16, "emitidos": 10, "en_proceso": 5, "no_emitidos": 1 },
+    "detalle_ramos": {
+      "prospectos": { "VIDA": 2, "DAÑOS": 5, "ACCIDENTES Y ENFERMEDADES": 3, "sin_ramo": 82 },
+      "oportunidades": { "VIDA": 1, "DAÑOS": 4, "ACCIDENTES Y ENFERMEDADES": 2, "sin_ramo": 64 },
+      "folios": {
+        "ramo": { "VIDA": 0, "DAÑOS": 8, "ACCIDENTES Y ENFERMEDADES": 2, "sin_ramo": 0 },
+        "sub_ramo": { "GASTOS MÉDICOS MAYORES": 2, "VIDA INDIVIDUAL": 0, "VIDA GRUPO": 0, "HOGAR": 0, "AUTOMÓVILES": 8, "sin_sub_ramo": 0 }
+      }
+    },
+    "produccion_periodo_cierre": {
+      "polizas_emitidas_total": 33,
+      "prima_colocada_total": 522828.12,
+      "dias_promedio_emision": 33.9,
+      "total_canceladas": 0,
+      "total_vigentes": 33,
+      "ticket_promedio_prima": 15843.28,
+      "composicion_origen_emisiones": { "prospectos_nuevos": 2, "cuentas_existentes": 31, "pct_origen_prospectos": 6.06, "pct_origen_cuentas_existentes": 93.94 },
+      "composicion_inmediatez_emisiones": { "mismo_periodo": 20, "arrastre_pasado": 13, "pct_mismo_periodo": 60.61, "pct_arrastre_pasado": 39.39 },
+      "distribucion_ramo_emisiones": [
+        { "ramo": "DAÑOS", "monto": 421004.0, "porcentaje": 80.53 },
+        { "ramo": "ACCIDENTES Y ENFERMEDADES", "monto": 101824.12, "porcentaje": 19.47 },
+        { "ramo": "VIDA", "monto": 0.0, "porcentaje": 0.0 }
+      ]
+    },
+    "gestion_cohorte_creacion": { "leads_registrados": 92, "oportunidades_generadas": 71, "emisiones_mismo_periodo": 20, "oportunidades_en_proceso": 33, "oportunidades_no_emitidas": 18 },
+    "eficiencia_prospeccion": { "tasa_conversion_prospecto_pct": 10.87, "tasa_cierre_prospeccion_pct": 2.17 },
+    "eficiencia_comercial": { "tasa_cierre_oportunidad_pct": 28.17, "tasa_oportunidades_perdidas_pct": 25.35, "pct_origen_cuentas_existentes": 85.92, "pct_origen_prospectos": 14.08 },
+    "metrica_financiera_cohorte": { "monto_total_cotizado": 539072.39 },
+    "distribucion_origen": [
+      { "origen": "Sitio web", "total": 41, "porcentaje": 44.57, "emitidas": 15, "porcentaje_emitidas": 36.59 },
+      { "origen": "Llamada Entrante", "total": 28, "porcentaje": 30.43, "emitidas": 3, "porcentaje_emitidas": 10.71 }
+    ],
     "pagination": { "page": 0, "size": 10, "total_pages": 16, "total_records": 153 },
-    "filtros_aplicados": { "status_lead": null, "stage_opp": null, "fecha_inicio": "2026-07-01", "fecha_fin": null, "periodo": null, "con_folio": null }
+    "filtros_aplicados": { "status_lead": null, "stage_opp": null, "ramo": null, "fecha_inicio": "2026-07-01", "fecha_fin": null, "periodo": null, "con_folio": null }
   },
   "items": [ ]
 }

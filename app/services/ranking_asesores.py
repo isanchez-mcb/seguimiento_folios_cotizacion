@@ -296,6 +296,47 @@ def agrupar_por_asesor(
     return resultado
 
 
+def _item_coincide_ramo(item: Dict[str, Any], ramos: set) -> bool:
+    """
+    True si el prospecto, la oportunidad (Ramos_de_interes__c) o algún
+    folio (Ramo__c) del item coincide con alguno de los ramos pedidos.
+    Mismo criterio que filtrar_por_ramo (trazabilidad_asesor.py), pero
+    soporta varios ramos a la vez.
+    """
+    prospecto = item.get("prospecto") or {}
+    if prospecto.get("ramos_interes") in ramos:
+        return True
+
+    opp = item.get("oportunidad")
+    if opp and opp.get("ramos_interes") in ramos:
+        return True
+
+    if any(folio.get("ramo") in ramos for folio in item.get("folios_emision", [])):
+        return True
+
+    return False
+
+
+def filtrar_grupos_por_ramo(
+    grupos: List[Dict[str, Any]],
+    ramos: List[str],
+) -> List[Dict[str, Any]]:
+    """Filtra los items de cada asesor a solo los que coincidan con alguno de los ramos."""
+    ramos_set = set(ramos)
+    for grupo in grupos:
+        grupo["items"] = [item for item in grupo["items"] if _item_coincide_ramo(item, ramos_set)]
+    return grupos
+
+
+def filtrar_roster_por_puesto(
+    roster: List[Dict[str, Any]],
+    puestos: List[str],
+) -> List[Dict[str, Any]]:
+    """Filtra el roster a solo los asesores cuyo Puesto__c esté en la lista pedida."""
+    puestos_set = {p.strip() for p in puestos}
+    return [a for a in roster if (a.get("puesto") or "").strip() in puestos_set]
+
+
 # ─── Capa 4: Métricas de negocio del ranking ───────────────────────
 
 def _resolver_origen_item(item: Dict[str, Any]) -> str:
@@ -883,6 +924,8 @@ def obtener_ranking_global(
     periodo: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
+    ramo: Optional[List[str]] = None,
+    puesto: Optional[List[str]] = None,
     page: int = 0,
     size: int = 20,
 ) -> Dict[str, Any]:
@@ -890,18 +933,24 @@ def obtener_ranking_global(
     Flujo:
     1. Resuelve el rango de fechas (fecha_inicio/fecha_fin > periodo).
     2. Trae el roster completo de asesores y resuelve sus User Ids.
+       Si se pidió filtrar por puesto, se filtra el roster aquí (antes de
+       consultar Leads/Oportunidades, para no traer datos de más).
     3. Consulta Leads y Oportunidades de TODOS los asesores en lote.
     4. Consulta Folios y Cuentas en lote (a partir de las oportunidades).
     5. Agrupa por asesor y ensambla items (reutilizando construir_items_unificada).
+       Si se pidió filtrar por ramo, se filtran los items de cada asesor aquí.
     6. Calcula métricas de negocio por asesor (cada métrica filtra por la
        fecha propia de su entidad; ver docstring de calcular_metricas_asesor).
     7. Ordena según sort_by/order.
-    8. Calcula el resumen general de la empresa (sobre el total, sin paginar).
+    8. Calcula el resumen general de la empresa (sobre el total filtrado, sin paginar).
     9. Pagina en memoria.
     """
     inicio, fin = resolver_rango_fechas(periodo, fecha_inicio, fecha_fin)
 
     roster = obtener_roster_asesores(sf)
+    if puesto:
+        roster = filtrar_roster_por_puesto(roster, puesto)
+
     user_ids = [a["user_id"] for a in roster if a.get("user_id")]
 
     leads = consultar_leads_globales(sf, user_ids, fin)
@@ -914,6 +963,8 @@ def obtener_ranking_global(
     cuentas = consultar_cuentas_en_lote(sf, account_ids)
 
     grupos = agrupar_por_asesor(roster, leads, oportunidades, folios_por_opp, cuentas)
+    if ramo:
+        grupos = filtrar_grupos_por_ramo(grupos, ramo)
 
     asesores = []
     for grupo in grupos:
@@ -970,6 +1021,8 @@ def obtener_ranking_global(
                 "periodo": periodo,
                 "fecha_inicio": fecha_inicio,
                 "fecha_fin": fecha_fin,
+                "ramo": ramo,
+                "puesto": puesto,
             },
         },
         "items": items_respuesta,
