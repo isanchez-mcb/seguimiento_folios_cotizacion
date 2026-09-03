@@ -390,3 +390,38 @@ class negocios_lead_campo:
             "requiere_expediente": False,
         },
     }
+
+
+class ramos_lead_campo:
+    """
+    Catálogo de mapeo de seguros del formulario de lead de campo → Ramos_de_interes__c de Salesforce.
+
+    Cada catálogo corresponde a las opciones que el frontend muestra según el tipo de
+    prospecto (Masivo, Persona física - Nuevos negocios, Persona moral - Nuevos negocios).
+    Un mismo seguro puede mapear a más de un ramo (ej. "Protección para mis empleados").
+    """
+
+    MASIVO = {
+        "Gastos Medicos Mayores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Autos": ["DAÑOS"],
+        "Vida": ["VIDA"],
+        "Hogar": ["DAÑOS"],
+    }
+
+    PERSONA_FISICA_NN = {
+        "Hogar": ["DAÑOS"],
+        "Gastos Medicos Mayores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Gastos Medicos Menores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Autos": ["DAÑOS"],
+        "Vida": ["VIDA"],
+        "Viajes": ["ACCIDENTES Y ENFERMEDADES"],
+        "Responsabilidad Civil General": ["DAÑOS"],
+        "Responsabilidad Civil Profesional": ["DAÑOS"],
+        "Mascotas": ["DAÑOS"],
+        "Transporte de mercancías": ["DAÑOS"],
+    }
+
+    PERSONA_MORAL_NN = {
+        "Protección para mi empresa": ["DAÑOS"],
+        "Protección para mis empleados": ["ACCIDENTES Y ENFERMEDADES", "VIDA"],
+    }

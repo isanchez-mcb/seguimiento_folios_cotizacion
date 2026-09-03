@@ -82,6 +82,8 @@ class CreateLeadCampoRequest(BaseModel):
     email: str
     telefono: str
     empresa: Optional[str] = None
+    expediente_colaborador: Optional[str] = None
+    company: Optional[str] = None
     seguros: List[str]
     numero_asesor: str
 
