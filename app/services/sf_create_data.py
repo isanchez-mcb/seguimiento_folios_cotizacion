@@ -1,9 +1,24 @@
 import base64
 
+from typing import Optional
+
 from fastapi import HTTPException
 from simple_salesforce import Salesforce
 
 from app.dependencias.sf_service import SesionExpiradaError, es_error_sesion, query_con_reintento
+
+
+class LeadDuplicadoError(Exception):
+    """
+    Se lanza desde createLead cuando reintentar_sin_expediente es False y Salesforce
+    detecta un duplicado. record_id es el Id del registro existente extraído del error
+    de Salesforce (puede ser una Account si ya es cliente, o un Lead si ya existe un
+    prospecto con estos datos), o None si no se pudo extraer.
+    """
+    def __init__(self, mensaje: str, record_id: Optional[str] = None):
+        self.mensaje = mensaje
+        self.record_id = record_id
+        super().__init__(mensaje)
 
 
 def createOpportunity(sf, oportunidad_data: dict) -> str:
@@ -17,19 +32,27 @@ def createOpportunity(sf, oportunidad_data: dict) -> str:
         print(f"Error al crear la oportunidad: {e}")
         raise
 
-def createLead(sf, lead_data: dict) -> tuple:
+def createLead(sf, lead_data: dict, reintentar_sin_expediente: bool = True) -> tuple:
     """
     Crea un lead en Salesforce.
-    
+
     Si se detecta DUPLICATES_DETECTED por la regla Masivo_2_0 (expediente duplicado),
-    extrae el AccountId del error, elimina No_expediente_No_colaborador__c de los datos
-    y reintenta la creación.
-    
+    extrae el Id del registro duplicado del error.
+
+    - Si reintentar_sin_expediente es False, se lanza LeadDuplicadoError de inmediato
+      (sin reintentar) con ese Id, para que el llamador decida qué hacer (ver
+      crearLeadCampo.py, que puede crear una Opportunity o una tarea de seguimiento).
+    - Si reintentar_sin_expediente es True (default, usado por cotización): si hay
+      expediente, se elimina (junto con Negocio__c) y se reintenta; si ese reintento
+      también falla por duplicado y hay Email en los datos, se elimina el Email y se
+      reintenta una vez más. Si no hay expediente pero sí Email, se elimina el Email
+      y se reintenta una vez.
+
     Returns:
-        tuple: (lead_result: OrderedDict, account_id: str | None)
-        
+        tuple: (lead_result: OrderedDict, duplicate_record_id: str | None)
+
         lead_result: resultado de la creación del lead
-        account_id: ID de la cuenta duplicada (si aplica) o None si no hubo duplicado
+        duplicate_record_id: Id del registro duplicado (si aplica) o None si no hubo duplicado
     """
     try:
         headers = {'Sforce-Auto-Assign': 'TRUE'}
@@ -44,77 +67,91 @@ def createLead(sf, lead_data: dict) -> tuple:
         if es_error_sesion(e):
             print("Sesión expirada al crear lead.")
             raise SesionExpiradaError(error_str) from e
-        if "DUPLICATES_DETECTED" in error_str:
-            account_id = None
+
+        if "DUPLICATES_DETECTED" not in error_str:
+            print(f"Error al crear el lead: {e}")
+            raise
+
+        duplicate_record_id = None
+        try:
+            # Extraer el Id del registro duplicado del error (formato: 'Id': '001WR...')
+            import re
+            match = re.search(r"'Id':\s*'(\w+)'", error_str)
+            if match:
+                duplicate_record_id = match.group(1)
+                print(f"Registro duplicado encontrado: {duplicate_record_id}")
+        except Exception as parse_error:
+            print(f"Error al parsear el Id del duplicado: {parse_error}")
+
+        if not reintentar_sin_expediente:
+            # El llamador decide qué hacer con el duplicado (ej. crear una Opportunity
+            # sobre la cuenta ya existente) en lugar de reintentar silenciosamente.
+            raise LeadDuplicadoError(
+                "Ya existe un prospecto con este expediente o este correo, gracias por su interés.",
+                record_id=duplicate_record_id
+            )
+
+        if 'No_expediente_No_colaborador__c' in lead_data:
+            # Eliminar expediente (y Negocio__c, ligado a la misma validación) y reintentar
+            del lead_data['No_expediente_No_colaborador__c']
+            if 'Negocio__c' in lead_data:
+                del lead_data['Negocio__c']
+            print("Expediente eliminado del lead_data, reintentando...")
             try:
-                # Extraer el AccountId del error (formato: 'Id': '001WR...')
-                import re
-                match = re.search(r"'Id':\s*'(\w+)'", error_str)
-                if match:
-                    account_id = match.group(1)
-                    print(f"Cuenta duplicada encontrada: {account_id}")
-            except Exception as parse_error:
-                print(f"Error al parsear account_id del error: {parse_error}")
+                sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
+                lead = sf.Lead.create(lead_data)
+                sf.headers.pop('Sforce-Auto-Assign', None)
+                print(f"Lead creado exitosamente en reintento: {lead}")
+                return lead, duplicate_record_id
+            except Exception as retry_e:
+                retry_error_str = str(retry_e)
+                print(f"Error en reintento: {retry_error_str}")
 
-            # Eliminar expediente y reintentar
-            if 'No_expediente_No_colaborador__c' in lead_data:
-                del lead_data['No_expediente_No_colaborador__c']
-                if 'Negocio__c' in lead_data:
-                    del lead_data['Negocio__c']
-                print("Expediente eliminado del lead_data, reintentando...")
-                try:
-                    sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
-                    lead = sf.Lead.create(lead_data)
-                    sf.headers.pop('Sforce-Auto-Assign', None)
-                    print(f"Lead creado exitosamente en reintento: {lead}")
-                    return lead, account_id
-                except Exception as retry_e:
-                    retry_error_str = str(retry_e)
-                    print(f"Error en reintento: {retry_error_str}")
-
-                    # Si el reintento sigue fallando por DUPLICATES_DETECTED (email),
-                    # eliminar el Email y reintentar una vez más
-                    if "DUPLICATES_DETECTED" in retry_error_str and 'Email' in lead_data:
-                        del lead_data['Email']
-                        print("Email eliminado del lead_data por duplicado, reintentando...")
-                        try:
-                            sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
-                            lead = sf.Lead.create(lead_data)
-                            sf.headers.pop('Sforce-Auto-Assign', None)
-                            print(f"Lead creado exitosamente en segundo reintento: {lead}")
-                            return lead, account_id
-                        except Exception as retry2_e:
-                            print(f"Error en segundo reintento: {retry2_e}")
-                            raise HTTPException(
-                                status_code=402,
-                                detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
-                            )
-            else:
-                # Si no hay expediente pero el duplicado es por email,
-                # eliminar el Email y reintentar
-                if 'Email' in lead_data:
+                # Si el reintento sigue fallando por DUPLICATES_DETECTED (email),
+                # eliminar el Email y reintentar una vez más
+                if "DUPLICATES_DETECTED" in retry_error_str and 'Email' in lead_data:
                     del lead_data['Email']
-                    print("Email eliminado del lead_data por duplicado (sin expediente), reintentando...")
+                    print("Email eliminado del lead_data por duplicado, reintentando...")
                     try:
                         sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
                         lead = sf.Lead.create(lead_data)
                         sf.headers.pop('Sforce-Auto-Assign', None)
-                        print(f"Lead creado exitosamente en reintento sin email: {lead}")
-                        return lead, account_id
-                    except Exception as retry_e:
-                        print(f"Error en reintento sin email: {retry_e}")
+                        print(f"Lead creado exitosamente en segundo reintento: {lead}")
+                        return lead, duplicate_record_id
+                    except Exception as retry2_e:
+                        print(f"Error en segundo reintento: {retry2_e}")
                         raise HTTPException(
                             status_code=402,
                             detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
                         )
-                else:
+
+                raise HTTPException(
+                    status_code=402,
+                    detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                )
+        else:
+            # Si no hay expediente pero el duplicado es por email,
+            # eliminar el Email y reintentar
+            if 'Email' in lead_data:
+                del lead_data['Email']
+                print("Email eliminado del lead_data por duplicado (sin expediente), reintentando...")
+                try:
+                    sf.headers.update({'Sforce-Auto-Assign': 'TRUE'})
+                    lead = sf.Lead.create(lead_data)
+                    sf.headers.pop('Sforce-Auto-Assign', None)
+                    print(f"Lead creado exitosamente en reintento sin email: {lead}")
+                    return lead, duplicate_record_id
+                except Exception as retry_e:
+                    print(f"Error en reintento sin email: {retry_e}")
                     raise HTTPException(
                         status_code=402,
                         detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
                     )
-
-        print(f"Error al crear el lead: {e}")
-        raise
+            else:
+                raise HTTPException(
+                    status_code=402,
+                    detail="Ya existe un prospecto con este expediente o este correo, gracias por su interés."
+                )
 
 def crear_nota_generica(id_lead: str, sf, html_content: str, titulo: str) -> bool:
     """
@@ -382,7 +419,14 @@ def crear_tarea_folio(sf, case_id: str, owner_id: str, descripcion: str) -> bool
         return False
 
 
-def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
+def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None, usar_what_id: bool = False):
+    """
+    Crea una Task de seguimiento asociada a un registro.
+
+    usar_what_id: False (default) asocia la tarea vía WhoId (Lead/Contact), igual que
+    siempre. True la asocia vía WhatId (Opportunity/Account/etc.), requerido por
+    Salesforce cuando el registro relacionado no es un Lead ni un Contact.
+    """
     try:
         from app.services.crearCortizacion import fecha_recordatorio
 
@@ -395,7 +439,6 @@ def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
             descripcion_final = f"{descripcion}\n\nCuenta asociada: https://customer-customer-9846.lightning.force.com/lightning/r/Account/{account_id}/view"
 
         task_data = {
-            'WhoId': lead_id, 
             'OwnerId': owner_id,
             'Subject': 'Call',
             'ActivityDate': activity_date,
@@ -405,6 +448,10 @@ def crearTarea(sf, lead_id, owner_id, descripcion, account_id=None):
             'Description': descripcion_final,
             'ReminderDateTime': recordatorio
         }
+        if usar_what_id:
+            task_data['WhatId'] = lead_id
+        else:
+            task_data['WhoId'] = lead_id
 
         headers_previos = dict(sf.headers)
         sf.headers.clear()

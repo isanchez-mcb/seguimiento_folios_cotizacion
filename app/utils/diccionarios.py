@@ -368,3 +368,60 @@ class campos_cotizacion:
         "mascota_data": "MASCOTA",
         "viajes_data": "VIAJES"
     }
+
+
+class negocios_lead_campo:
+    """
+    Catálogo de negocios para el formulario de lead de campo.
+    
+    Cada entrada mapea un código frontend a:
+    - nombre_sf: nombre completo que espera Salesforce en Negocio__c
+    - requiere_expediente: True si Salesforce exige expediente para este negocio
+    
+    Para agregar un nuevo negocio, solo añade una entrada aquí.
+    """
+    MAPEO = {
+        "STRM": {
+            "nombre_sf": "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA",
+            "requiere_expediente": True,
+        },
+        "BIMBO": {
+            "nombre_sf": "GRUPO BIMBO, S.A.B. DE C.V.",
+            "requiere_expediente": False,
+        },
+    }
+
+
+class ramos_lead_campo:
+    """
+    Catálogo de mapeo de seguros del formulario de lead de campo → Ramos_de_interes__c de Salesforce.
+
+    Cada catálogo corresponde a las opciones que el frontend muestra según el tipo de
+    prospecto (Masivo, Persona física - Nuevos negocios, Persona moral - Nuevos negocios).
+    Un mismo seguro puede mapear a más de un ramo (ej. "Protección para mis empleados").
+    """
+
+    MASIVO = {
+        "Gastos Medicos Mayores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Autos": ["DAÑOS"],
+        "Vida": ["VIDA"],
+        "Hogar": ["DAÑOS"],
+    }
+
+    PERSONA_FISICA_NN = {
+        "Hogar": ["DAÑOS"],
+        "Gastos Medicos Mayores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Gastos Medicos Menores": ["ACCIDENTES Y ENFERMEDADES"],
+        "Autos": ["DAÑOS"],
+        "Vida": ["VIDA"],
+        "Viajes": ["ACCIDENTES Y ENFERMEDADES"],
+        "Responsabilidad Civil General": ["DAÑOS"],
+        "Responsabilidad Civil Profesional": ["DAÑOS"],
+        "Mascotas": ["DAÑOS"],
+        "Transporte de mercancías": ["DAÑOS"],
+    }
+
+    PERSONA_MORAL_NN = {
+        "Protección para mi empresa": ["DAÑOS"],
+        "Protección para mis empleados": ["ACCIDENTES Y ENFERMEDADES", "VIDA"],
+    }

@@ -116,6 +116,46 @@ def construir_template_asignacion(
     return asunto, cuerpo_html
 
 
+def _limpiar_telefono(telefono: str) -> str:
+    """Deja solo dígitos y un posible '+' inicial, para usarlo en enlaces tel:."""
+    if not telefono:
+        return ""
+    return "".join(c for c in telefono if c.isdigit() or c == '+')
+
+
+def construir_template_confirmacion_lead_campo(
+    nombre_usuario: str,
+    intereses_seleccionados: str,
+    nombre_asesor: str,
+    telefono_asesor: str,
+    email_asesor: str,
+) -> tuple:
+    """
+    Carga el template email_confirmacion_lead_campo.html y sustituye los placeholders.
+
+    Se envía al cliente que llenó el formulario de campo (QR) para confirmar que su
+    solicitud fue recibida, con los datos de contacto del asesor externo asignado.
+
+    Retorna (asunto: str, cuerpo_html: str).
+    """
+    html_raw = _cargar_template("email_confirmacion_lead_campo.html")
+    template = Template(html_raw)
+
+    asunto = "¡Hemos recibido tu solicitud!"
+
+    cuerpo_html = template.safe_substitute(
+        nombre_usuario=nombre_usuario,
+        intereses_seleccionados=intereses_seleccionados,
+        titulo_asesor="Tu asesor asignado",
+        nombre_asesor=nombre_asesor,
+        telefono_asesor=telefono_asesor,
+        telefono_asesor_clean=_limpiar_telefono(telefono_asesor),
+        email_asesor=email_asesor,
+    )
+
+    return asunto, cuerpo_html
+
+
 # ═══════════════════════════════════════════════════════════════════
 # CAPA 3: Envío SMTP (no sabe nada de Salesforce ni de leads)
 # ═══════════════════════════════════════════════════════════════════
@@ -569,3 +609,38 @@ def notificar_asignacion(
             f"(owner_id={owner_id}, lider_id={lider_id})."
         )
         return False
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CAPA 4: Orquestador para confirmación de lead de campo (QR)
+# ═══════════════════════════════════════════════════════════════════
+
+def notificar_confirmacion_lead_campo(
+    email_destino: str,
+    nombre_completo: str,
+    seguros: list,
+    nombre_asesor: str,
+    telefono_asesor: Optional[str],
+    email_asesor: Optional[str],
+) -> bool:
+    """
+    Envía al cliente que llenó el formulario de campo (QR) la confirmación de que
+    su solicitud fue recibida, con los datos de contacto del asesor externo asignado.
+
+    Returns:
+        True si se envió correctamente, False en caso contrario (no lanza excepción,
+        para no bloquear la creación del Lead/Opportunity si el correo falla).
+    """
+    if not email_destino:
+        logger.warning("Email de destino vacío, no se envía confirmación de lead de campo.")
+        return False
+
+    asunto, cuerpo = construir_template_confirmacion_lead_campo(
+        nombre_usuario=nombre_completo,
+        intereses_seleccionados=", ".join(seguros),
+        nombre_asesor=nombre_asesor,
+        telefono_asesor=telefono_asesor or "",
+        email_asesor=email_asesor or "",
+    )
+
+    return enviar_correo_smtp(destinatario=email_destino, asunto=asunto, cuerpo_html=cuerpo)
