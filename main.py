@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api.endpoints import folios, cotizacion, registro_campaign, asesores_externos
+from app.api.endpoints import folios, cotizacion, registro_campaign, asesores_externos, webhooks
 from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
@@ -25,3 +25,4 @@ app.include_router(folios.router)
 app.include_router(cotizacion.router)
 app.include_router(registro_campaign.router)
 app.include_router(asesores_externos.router)
+app.include_router(webhooks.router)

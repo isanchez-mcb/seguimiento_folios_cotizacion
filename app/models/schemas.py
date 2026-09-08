@@ -148,3 +148,12 @@ class CrearFolioResponse(BaseModel):
     case_link: Optional[str] = None
     mensaje: str
 
+class AccountEmailChangedRequest(BaseModel):
+    account_id: str
+    account_name: str
+    old_email: Optional[str] = None
+    new_email: Optional[str] = None
+
+class AccountEmailChangedResponse(BaseModel):
+    mensaje: str
+
