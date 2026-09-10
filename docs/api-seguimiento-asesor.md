@@ -167,9 +167,44 @@ Desglose de prospectos, oportunidades y folios por ramo (`VIDA`, `DAÑOS`, `ACCI
 | `composicion_inmediatez_emisiones.mismo_periodo` / `.arrastre_pasado` | De los folios emitidos del periodo, cuántos vienen de una oportunidad **creada en ese mismo rango** vs. de una oportunidad de un periodo anterior (arrastre). |
 | `composicion_inmediatez_emisiones.pct_mismo_periodo` | Porcentaje de emisiones del periodo negociadas en este mismo mes. |
 | `composicion_inmediatez_emisiones.pct_arrastre_pasado` | Porcentaje de emisiones del periodo negociadas en meses pasados. |
-| `distribucion_ramo_emisiones` | Mezcla porcentual de la prima emitida de caja distribuida por ramo — lista de `{ ramo, monto, porcentaje }` sobre `prima_colocada_total`. |
+| `distribucion_ramo_emisiones` | Desglose de la prima emitida del periodo por ramo, con su composición interna (sub_ramo/producto y, en ACCIDENTES Y ENFERMEDADES, empresa) y su partición por inmediatez (mismo periodo vs. arrastre). Ver el shape completo (`MetricasBucketEmision`) más abajo. |
 
 > Nota: a diferencia de `resumen_ejecutivo`/`detalle_*`, este bloque **no** aplica los filtros `status_lead`/`stage_opp`/`ramo`/`con_folio` — refleja toda la producción cerrada del asesor en el rango de fechas, porque requiere una consulta adicional sin acotar por `CreatedDate` (para no perder el arrastre).
+
+##### Shape común de cada bucket (`MetricasBucketEmision`)
+
+`distribucion_ramo_emisiones[]` y sus dos desgloses anidados (`distribucion_sub_ramo[]`, `distribucion_empresa[]`) comparten exactamente el mismo set de métricas — solo cambia el campo que identifica el bucket (`ramo`, `sub_ramo` o `empresa`):
+
+| Campo | Significado |
+|---|---|
+| `monto` / `prima_total` | Prima total del bucket (son el mismo valor; `prima_total` está para que quede junto a `prima_mismo_periodo`/`prima_arrastre_pasado` y no haya que buscarlo arriba). |
+| `porcentaje` | `monto` como % — ver la base de comparación abajo, cambia entre nivel ramo y desgloses anidados. |
+| `emitidas` | Cantidad de pólizas (folios) emitidas que caen en este bucket. |
+| `porcentaje_emitidas` | `emitidas` como % — misma base que `porcentaje`, pero contando pólizas en vez de sumar prima (puede diferir de `porcentaje` si el bucket tiene pocas pólizas de ticket alto, o muchas de ticket bajo). |
+| `emitidas_mismo_periodo` / `emitidas_arrastre_pasado` | De `emitidas`, cuántas vienen de una oportunidad creada en el rango consultado vs. de una oportunidad de un periodo anterior (arrastre) — mismo criterio que `composicion_inmediatez_emisiones` a nivel de todo el asesor. |
+| `prima_mismo_periodo` / `prima_arrastre_pasado` | Prima de esas mismas pólizas, partida por el mismo criterio. `prima_mismo_periodo + prima_arrastre_pasado = prima_total`. |
+
+**Base de los porcentajes** — igual que antes, cada nivel calcula `porcentaje`/`porcentaje_emitidas` contra una base distinta, para que sumen 100% entre los hermanos de ese nivel:
+
+| Nivel | Base de `porcentaje` | Base de `porcentaje_emitidas` |
+|---|---|---|
+| `distribucion_ramo_emisiones[]` (ramo) | `prima_colocada_total` (todo el asesor) | `polizas_emitidas_total` (todo el asesor) |
+| `distribucion_sub_ramo[]` / `distribucion_empresa[]` (anidados) | `monto` del ramo padre | `emitidas` del ramo padre |
+
+##### `distribucion_ramo_emisiones[].distribucion_sub_ramo`
+
+Desglose granular dentro de cada ramo, de las mismas pólizas ya contadas en `distribucion_ramo_emisiones`. La fuente del campo cambia según el ramo:
+
+| Ramo | Campo fuente | Ejemplo de valores |
+|---|---|---|
+| `VIDA` | `Case.Producto_polizas__c` (**no** `Sub_ramos__c`) | `VIDAMAS`, `VIDA INDIVIDUAL`, ... |
+| `DAÑOS`, `ACCIDENTES Y ENFERMEDADES` | `Case.Sub_ramos__c` | `HOGAR`, `AUTOMÓVILES`, `GASTOS MÉDICOS MAYORES`, ... |
+
+Un folio sin ese campo capturado en Salesforce se agrupa bajo `sub_ramo: "SIN_SUB_RAMO"`.
+
+##### `distribucion_ramo_emisiones[].distribucion_empresa`
+
+Solo se calcula (y solo trae datos) dentro del ramo `ACCIDENTES Y ENFERMEDADES`; en `VIDA` y `DAÑOS` siempre viene como lista vacía `[]`. Desglosa la prima del ramo por la empresa dueña de la cuenta (`Account.Negocio__c` de la cuenta del item — convertida desde el Lead, o la cuenta directa de la oportunidad en venta directa). `empresa` es `"GRUPO BIMBO, S.A.B. DE C.V."`, `"SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA"`, o `"OTROS"` si `Account.Negocio__c` no coincide con ninguna de esas dos (incluye cuentas sin ese campo capturado).
 
 #### `gestion_cohorte_creacion`
 
@@ -293,6 +328,7 @@ Mapea el Lead de Salesforce. Los campos reflejan directamente atributos del Lead
 |---|---|---|
 | `account_id` | `Account.Id` | |
 | `account_name` | `Account.Name` (o el nombre del Lead si la cuenta no trae `Name`) | |
+| `negocio` | `Account.Negocio__c` | Empresa/línea de negocio de la cuenta. Es la base de `distribucion_ramo_emisiones[].distribucion_empresa` (ver sección de `produccion_periodo_cierre`). |
 | `created_by_name` | `Account.CreatedBy.Name` | |
 | `created_date` | `Account.CreatedDate` | |
 
@@ -310,7 +346,7 @@ Mapea el Lead de Salesforce. Los campos reflejan directamente atributos del Lead
 | `ramos_interes` | `Opportunity.Ramos_de_interes__c` | |
 | `nivel_interes` | `Opportunity.Nivel_interes__c` | |
 | `owner_name` | `Opportunity.Owner.Name` | |
-| `origen_oportunidad` | `Opportunity.Origen_de_oportunidad__c` | (Campo consultado pero no incluido en `OPPORTUNITY_FIELDS`; puede regresar siempre `null` — ver nota abajo.) |
+| `origen_oportunidad` | `Opportunity.Origen_de_oportunidad__c` | Canal/origen de la oportunidad; base de `distribucion_origen`. |
 | `close_date` | `Opportunity.CloseDate` | Fecha estimada/real de cierre. |
 | `probability` | `Opportunity.Probability` | |
 | `fecha_seguimiento` | `Opportunity.Fecha_de_seguimiento__c` | |
@@ -326,8 +362,6 @@ Mapea el Lead de Salesforce. Los campos reflejan directamente atributos del Lead
 | `cotizacion` | `Opportunity.Cotizacion__c` | Puede venir como texto o booleano según el dato en Salesforce. |
 | `razon_perdida` / `otra_razon_perdida` | `Opportunity.Razon_de_perdida__c` / `Otra_razon_de_perdida__c` | |
 | `created_date` / `last_modified_date` / `last_modified_by_name` | `Opportunity.CreatedDate` / `LastModifiedDate` / `LastModifiedBy.Name` | |
-
-> Nota: `origen_oportunidad` está en el mapeo (`mapear_oportunidad`) pero el campo `Origen_de_oportunidad__c` no forma parte de `OPPORTUNITY_FIELDS` (el SELECT de la consulta SOQL). En la práctica esto puede devolver siempre `null`; si el frontend necesita este dato, hay que agregar el campo a la consulta en `trazabilidad_asesor.py`.
 
 #### `folios_emision[]` (`FolioEmisionInfo`)
 
@@ -349,7 +383,7 @@ Cada folio es un `Case` de Salesforce vinculado a la oportunidad mediante `Oport
 | `razon_no_emision` | `Case.Razon_de_no_emision__c` | |
 | `ramo` / `sub_ramos` | `Case.Ramo__c` / `Case.Sub_ramos__c` | |
 | `aseguradora` | `Case.Aseguradora__c` | |
-| `producto_polizas` | `Case.Producto_polizas__c` | |
+| `producto_polizas` | `Case.Producto_polizas__c` | Producto contratado. En folios de ramo `VIDA`, es el campo que alimenta `distribucion_ramo_emisiones[].distribucion_sub_ramo` (en vez de `sub_ramos`, que en VIDA no es útil para el negocio). |
 | `created_date` / `closed_date` | `Case.CreatedDate` / `Case.ClosedDate` | |
 | `asesor_externo_name` | `Case.Asesor_externo__r.Name` | |
 | `created_by_name` / `last_modified_by_name` / `owner_name` | `Case.CreatedBy.Name` / `LastModifiedBy.Name` / `Owner.Name` | |
@@ -420,9 +454,123 @@ Respuesta (resumida):
       "composicion_origen_emisiones": { "prospectos_nuevos": 2, "cuentas_existentes": 31, "pct_origen_prospectos": 6.06, "pct_origen_cuentas_existentes": 93.94 },
       "composicion_inmediatez_emisiones": { "mismo_periodo": 20, "arrastre_pasado": 13, "pct_mismo_periodo": 60.61, "pct_arrastre_pasado": 39.39 },
       "distribucion_ramo_emisiones": [
-        { "ramo": "DAÑOS", "monto": 421004.0, "porcentaje": 80.53 },
-        { "ramo": "ACCIDENTES Y ENFERMEDADES", "monto": 101824.12, "porcentaje": 19.47 },
-        { "ramo": "VIDA", "monto": 0.0, "porcentaje": 0.0 }
+        {
+          "ramo": "DAÑOS",
+          "monto": 421004.0,
+          "porcentaje": 80.53,
+          "emitidas": 27,
+          "porcentaje_emitidas": 81.82,
+          "emitidas_mismo_periodo": 18,
+          "emitidas_arrastre_pasado": 9,
+          "prima_mismo_periodo": 280000.0,
+          "prima_arrastre_pasado": 141004.0,
+          "prima_total": 421004.0,
+          "distribucion_sub_ramo": [
+            {
+              "sub_ramo": "AUTOMÓVILES",
+              "monto": 380000.0,
+              "porcentaje": 90.26,
+              "emitidas": 24,
+              "porcentaje_emitidas": 88.89,
+              "emitidas_mismo_periodo": 16,
+              "emitidas_arrastre_pasado": 8,
+              "prima_mismo_periodo": 250000.0,
+              "prima_arrastre_pasado": 130000.0,
+              "prima_total": 380000.0
+            },
+            {
+              "sub_ramo": "HOGAR",
+              "monto": 41004.0,
+              "porcentaje": 9.74,
+              "emitidas": 3,
+              "porcentaje_emitidas": 11.11,
+              "emitidas_mismo_periodo": 2,
+              "emitidas_arrastre_pasado": 1,
+              "prima_mismo_periodo": 30000.0,
+              "prima_arrastre_pasado": 11004.0,
+              "prima_total": 41004.0
+            }
+          ],
+          "distribucion_empresa": []
+        },
+        {
+          "ramo": "ACCIDENTES Y ENFERMEDADES",
+          "monto": 101824.12,
+          "porcentaje": 19.47,
+          "emitidas": 6,
+          "porcentaje_emitidas": 18.18,
+          "emitidas_mismo_periodo": 4,
+          "emitidas_arrastre_pasado": 2,
+          "prima_mismo_periodo": 75000.0,
+          "prima_arrastre_pasado": 26824.12,
+          "prima_total": 101824.12,
+          "distribucion_sub_ramo": [
+            {
+              "sub_ramo": "GASTOS MÉDICOS MAYORES",
+              "monto": 101824.12,
+              "porcentaje": 100.0,
+              "emitidas": 6,
+              "porcentaje_emitidas": 100.0,
+              "emitidas_mismo_periodo": 4,
+              "emitidas_arrastre_pasado": 2,
+              "prima_mismo_periodo": 75000.0,
+              "prima_arrastre_pasado": 26824.12,
+              "prima_total": 101824.12
+            }
+          ],
+          "distribucion_empresa": [
+            {
+              "empresa": "GRUPO BIMBO, S.A.B. DE C.V.",
+              "monto": 70000.0,
+              "porcentaje": 68.74,
+              "emitidas": 4,
+              "porcentaje_emitidas": 66.67,
+              "emitidas_mismo_periodo": 3,
+              "emitidas_arrastre_pasado": 1,
+              "prima_mismo_periodo": 55000.0,
+              "prima_arrastre_pasado": 15000.0,
+              "prima_total": 70000.0
+            },
+            {
+              "empresa": "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA",
+              "monto": 20000.0,
+              "porcentaje": 19.64,
+              "emitidas": 1,
+              "porcentaje_emitidas": 16.67,
+              "emitidas_mismo_periodo": 1,
+              "emitidas_arrastre_pasado": 0,
+              "prima_mismo_periodo": 20000.0,
+              "prima_arrastre_pasado": 0.0,
+              "prima_total": 20000.0
+            },
+            {
+              "empresa": "OTROS",
+              "monto": 11824.12,
+              "porcentaje": 11.61,
+              "emitidas": 1,
+              "porcentaje_emitidas": 16.67,
+              "emitidas_mismo_periodo": 0,
+              "emitidas_arrastre_pasado": 1,
+              "prima_mismo_periodo": 0.0,
+              "prima_arrastre_pasado": 11824.12,
+              "prima_total": 11824.12
+            }
+          ]
+        },
+        {
+          "ramo": "VIDA",
+          "monto": 0.0,
+          "porcentaje": 0.0,
+          "emitidas": 0,
+          "porcentaje_emitidas": 0.0,
+          "emitidas_mismo_periodo": 0,
+          "emitidas_arrastre_pasado": 0,
+          "prima_mismo_periodo": 0.0,
+          "prima_arrastre_pasado": 0.0,
+          "prima_total": 0.0,
+          "distribucion_sub_ramo": [],
+          "distribucion_empresa": []
+        }
       ]
     },
     "gestion_cohorte_creacion": { "leads_registrados": 92, "oportunidades_generadas": 71, "emisiones_mismo_periodo": 20, "oportunidades_en_proceso": 33, "oportunidades_no_emitidas": 18 },

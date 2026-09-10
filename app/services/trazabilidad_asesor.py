@@ -51,6 +51,19 @@ SUB_RAMOS_VALIDOS = {
     "AUTOMÓVILES",
 }
 
+# Ramo cuyo desglose granular en distribucion_ramo_emisiones no usa
+# Case.Sub_ramos__c sino Case.Producto_polizas__c (VIDA no tiene subramos
+# útiles, el detalle relevante para el negocio está en el producto contratado).
+RAMO_CON_DESGLOSE_POR_PRODUCTO = "VIDA"
+
+# Empresas principales para el desglose de ganancia por Account.Negocio__c
+# dentro del ramo ACCIDENTES Y ENFERMEDADES. Cualquier otro valor (u
+# ausente) cae en el bucket "OTROS".
+EMPRESA_GRUPO_BIMBO = "GRUPO BIMBO, S.A.B. DE C.V."
+EMPRESA_SINDICATO_TELEFONISTAS = "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA"
+EMPRESAS_PRINCIPALES = {EMPRESA_GRUPO_BIMBO, EMPRESA_SINDICATO_TELEFONISTAS}
+RAMO_CON_DESGLOSE_EMPRESA = "ACCIDENTES Y ENFERMEDADES"
+
 # Campos SOQL para cada objeto
 LEAD_FIELDS = (
     "Id, Name, Status, IsConverted, ConvertedAccountId, ConvertedOpportunityId, "
@@ -74,7 +87,7 @@ OPPORTUNITY_FIELDS = (
     "Duracion_en_etapa_Cotizacion__c, Duracion_en_etapa_Proceso_de_cierre__c, "
     "Responsable_decision__c, Tiempo_estimado__c, Impedimentos__c, "
     "Razon_de_perdida__c, Otra_razon_de_perdida__c, CloseDate, Probability, "
-    "Origen_de_oportunidad__c, "
+    "Origen_de_oportunidad__c, AccountId, Account.Name, Account.Negocio__c, "
     "CreatedDate, OwnerId, Owner.Name, LastModifiedDate, LastModifiedBy.Name"
 )
 
@@ -91,7 +104,7 @@ CASE_FIELDS = (
 )
 
 ACCOUNT_FIELDS = (
-    "Id, Name, CreatedBy.Name, CreatedDate"
+    "Id, Name, Negocio__c, CreatedBy.Name, CreatedDate"
 )
 
 
@@ -551,6 +564,7 @@ def mapear_cuenta(
     return {
         "account_id": account_id,
         "account_name": _normalizar_str(account.get("Name") or lead.get("Name")),
+        "negocio": _normalizar_str(account.get("Negocio__c")),
         "created_by_name": _extraer_nombre_relacion(account.get("CreatedBy")),
         "created_date": _normalizar_str(account.get("CreatedDate")),
     }
@@ -730,12 +744,15 @@ def construir_items_unificada(
             # Cuenta viene directamente de la oportunidad
             account_id = opp.get("AccountId")
             account_name = None
+            negocio = None
             if opp.get("Account") and isinstance(opp.get("Account"), dict):
                 account_name = _normalizar_str(opp.get("Account").get("Name"))
+                negocio = _normalizar_str(opp.get("Account").get("Negocio__c"))
             if account_id:
                 cuenta_map = {
                     "account_id": account_id,
                     "account_name": account_name,
+                    "negocio": negocio,
                 }
             else:
                 cuenta_map = None
@@ -977,6 +994,161 @@ def calcular_kpis(items: List[Dict[str, Any]]) -> Dict[str, Any]:
 # Estos campos son ADITIVOS: conviven con resumen_ejecutivo/detalle_* de
 # calcular_kpis sin reemplazarlos ni modificarlos.
 
+def _clave_sub_ramo(ramo: str, folio: Dict[str, Any]) -> str:
+    """
+    Clave del desglose granular dentro de un ramo. VIDA se agrupa por
+    Producto_polizas__c (Case.producto_polizas) porque su Sub_ramos__c no es
+    útil para el negocio; el resto de los ramos usa Sub_ramos__c.
+    """
+    if ramo == RAMO_CON_DESGLOSE_POR_PRODUCTO:
+        valor = folio.get("producto_polizas")
+    else:
+        valor = folio.get("sub_ramos")
+    return valor or "SIN_SUB_RAMO"
+
+
+def _clasificar_empresa(cuenta: Optional[Dict[str, Any]]) -> str:
+    """Clasifica Account.Negocio__c en una de las dos empresas principales, u 'OTROS'."""
+    negocio = (cuenta or {}).get("negocio")
+    return negocio if negocio in EMPRESAS_PRINCIPALES else "OTROS"
+
+
+def _bucket_vacio() -> Dict[str, Any]:
+    """Acumulador crudo de un bucket (ramo / sub_ramo / empresa): monto y
+    conteo de pólizas emitidas, partidos por mismo_periodo vs. arrastre_pasado."""
+    return {
+        "monto": 0.0,
+        "monto_mismo_periodo": 0.0,
+        "monto_arrastre_pasado": 0.0,
+        "count": 0,
+        "count_mismo_periodo": 0,
+        "count_arrastre_pasado": 0,
+    }
+
+
+def _acumular_bucket(buckets: Dict[str, Dict[str, Any]], clave: str, monto: float, mismo_periodo: bool) -> None:
+    """Suma una póliza emitida al bucket `clave` dentro de `buckets` (se crea si no existe)."""
+    bucket = buckets.setdefault(clave, _bucket_vacio())
+    bucket["monto"] += monto
+    bucket["count"] += 1
+    if mismo_periodo:
+        bucket["monto_mismo_periodo"] += monto
+        bucket["count_mismo_periodo"] += 1
+    else:
+        bucket["monto_arrastre_pasado"] += monto
+        bucket["count_arrastre_pasado"] += 1
+
+
+def _sumar_bucket(destino: Dict[str, Any], entry: Dict[str, Any]) -> None:
+    """Suma los valores crudos de una entrada ya construida (de un asesor) dentro de un bucket agregado global."""
+    destino["monto"] += entry.get("prima_total") or 0.0
+    destino["monto_mismo_periodo"] += entry.get("prima_mismo_periodo") or 0.0
+    destino["monto_arrastre_pasado"] += entry.get("prima_arrastre_pasado") or 0.0
+    destino["count"] += entry.get("emitidas") or 0
+    destino["count_mismo_periodo"] += entry.get("emitidas_mismo_periodo") or 0
+    destino["count_arrastre_pasado"] += entry.get("emitidas_arrastre_pasado") or 0
+
+
+def _construir_bucket_entry(
+    campo_nombre: str,
+    nombre: str,
+    bucket: Dict[str, Any],
+    monto_ref: float,
+    count_ref: int,
+) -> Dict[str, Any]:
+    """
+    Construye una entrada de desglose ({ramo|sub_ramo|empresa, monto, porcentaje,
+    emitidas, ...}) a partir de un bucket crudo. `monto_ref`/`count_ref` son la
+    base contra la que se calculan los porcentajes: el total general para las
+    entradas de nivel ramo, o el monto/conteo del ramo padre para los desgloses
+    anidados (sub_ramo/empresa) — así cada desglose refleja su composición
+    interna, no su peso contra el total general.
+    """
+    monto = bucket["monto"]
+    count = bucket["count"]
+    return {
+        campo_nombre: nombre,
+        "monto": round(monto, 2),
+        "porcentaje": round(monto / monto_ref * 100, 2) if monto_ref else 0.0,
+        "emitidas": count,
+        "porcentaje_emitidas": round(count / count_ref * 100, 2) if count_ref else 0.0,
+        "emitidas_mismo_periodo": bucket["count_mismo_periodo"],
+        "emitidas_arrastre_pasado": bucket["count_arrastre_pasado"],
+        "prima_mismo_periodo": round(bucket["monto_mismo_periodo"], 2),
+        "prima_arrastre_pasado": round(bucket["monto_arrastre_pasado"], 2),
+        "prima_total": round(monto, 2),
+    }
+
+
+def construir_distribucion_ramo_emisiones(
+    stats_ramo: Dict[str, Dict[str, Any]],
+    stats_ramo_sub: Dict[str, Dict[str, Dict[str, Any]]],
+    stats_empresa_accidentes: Dict[str, Dict[str, Any]],
+    prima_colocada_total: float,
+    polizas_emitidas_total: int,
+) -> List[Dict[str, Any]]:
+    """
+    Ensambla distribucion_ramo_emisiones con su desglose anidado:
+    - distribucion_sub_ramo: siempre, por Sub_ramos__c (o Producto_polizas__c en VIDA).
+    - distribucion_empresa: solo en RAMO_CON_DESGLOSE_EMPRESA, por Account.Negocio__c.
+
+    Cada entrada (ramo, y dentro de cada una sub_ramo/empresa) trae monto +
+    conteo de pólizas emitidas, ambos partidos por mismo_periodo/arrastre_pasado.
+    Los porcentajes de los desgloses anidados son relativos al monto/conteo
+    del ramo padre (no al total general), para reflejar su composición interna;
+    los de nivel ramo son relativos al total general.
+    """
+    distribucion = []
+    for ramo, stats in stats_ramo.items():
+        entry = _construir_bucket_entry("ramo", ramo, stats, prima_colocada_total, polizas_emitidas_total)
+        entry["distribucion_sub_ramo"] = [
+            _construir_bucket_entry("sub_ramo", sub_ramo, sub_stats, stats["monto"], stats["count"])
+            for sub_ramo, sub_stats in stats_ramo_sub.get(ramo, {}).items()
+        ]
+        entry["distribucion_empresa"] = []
+        if ramo == RAMO_CON_DESGLOSE_EMPRESA:
+            entry["distribucion_empresa"] = [
+                _construir_bucket_entry("empresa", empresa, emp_stats, stats["monto"], stats["count"])
+                for empresa, emp_stats in stats_empresa_accidentes.items()
+            ]
+        distribucion.append(entry)
+    return distribucion
+
+
+def agregar_distribucion_ramo_emisiones(
+    distribuciones_por_asesor: List[List[Dict[str, Any]]],
+    prima_colocada_total: float,
+    polizas_emitidas_total: int,
+) -> List[Dict[str, Any]]:
+    """
+    Re-agrega distribucion_ramo_emisiones (incluyendo sub_ramo y empresa) de
+    varios asesores en un solo total global, sumando los valores crudos de
+    cada entrada y recalculando porcentajes (nunca promediando porcentajes ya
+    redondeados).
+    """
+    stats_ramo = {r: _bucket_vacio() for r in RAMOS_VALIDOS}
+    stats_ramo_sub: Dict[str, Dict[str, Dict[str, Any]]] = {r: {} for r in RAMOS_VALIDOS}
+    stats_empresa_accidentes: Dict[str, Dict[str, Any]] = {}
+
+    for distribucion in distribuciones_por_asesor:
+        for entry in distribucion:
+            ramo = entry.get("ramo")
+            if ramo not in stats_ramo:
+                continue
+            _sumar_bucket(stats_ramo[ramo], entry)
+            for sub in entry.get("distribucion_sub_ramo", []):
+                clave = sub.get("sub_ramo")
+                _sumar_bucket(stats_ramo_sub[ramo].setdefault(clave, _bucket_vacio()), sub)
+            if ramo == RAMO_CON_DESGLOSE_EMPRESA:
+                for emp in entry.get("distribucion_empresa", []):
+                    clave = emp.get("empresa")
+                    _sumar_bucket(stats_empresa_accidentes.setdefault(clave, _bucket_vacio()), emp)
+
+    return construir_distribucion_ramo_emisiones(
+        stats_ramo, stats_ramo_sub, stats_empresa_accidentes, prima_colocada_total, polizas_emitidas_total,
+    )
+
+
 def _resolver_rango_produccion(
     fecha_inicio: Optional[str],
     fecha_fin: Optional[str],
@@ -1055,7 +1227,9 @@ def calcular_produccion_periodo(
     total_canceladas = 0
     total_vigentes = 0
     dias_emision = []
-    prima_por_ramo = {r: 0.0 for r in RAMOS_VALIDOS}
+    stats_ramo = {r: _bucket_vacio() for r in RAMOS_VALIDOS}
+    stats_ramo_sub: Dict[str, Dict[str, Dict[str, Any]]] = {r: {} for r in RAMOS_VALIDOS}
+    stats_empresa_accidentes: Dict[str, Dict[str, Any]] = {}
     prospectos_nuevos = 0
     cuentas_existentes = 0
     emisiones_mismo_periodo = 0
@@ -1064,6 +1238,7 @@ def calcular_produccion_periodo(
     for item in items:
         opp = item.get("oportunidad")
         prospecto = item.get("prospecto")
+        cuenta = item.get("cuenta")
         origen_registro = item.get("origen_registro")
         fecha_origen = None
         if origen_registro == "PROSPECTO_CONVERTIDO" and prospecto:
@@ -1092,8 +1267,15 @@ def calcular_produccion_periodo(
             prima_colocada_total += monto
 
             ramo = folio.get("ramo")
-            if ramo in prima_por_ramo:
-                prima_por_ramo[ramo] += monto
+            if ramo in stats_ramo:
+                _acumular_bucket(stats_ramo, ramo, monto, opp_creada_en_rango)
+
+                sub_ramo = _clave_sub_ramo(ramo, folio)
+                _acumular_bucket(stats_ramo_sub[ramo], sub_ramo, monto, opp_creada_en_rango)
+
+                if ramo == RAMO_CON_DESGLOSE_EMPRESA:
+                    empresa = _clasificar_empresa(cuenta)
+                    _acumular_bucket(stats_empresa_accidentes, empresa, monto, opp_creada_en_rango)
 
             status = (folio.get("poliza_status") or "").strip().lower()
             if status == "cancelado":
@@ -1124,14 +1306,9 @@ def calcular_produccion_periodo(
         round(prima_colocada_total / polizas_emitidas_total, 2) if polizas_emitidas_total else 0.0
     )
 
-    distribucion_ramo_emisiones = [
-        {
-            "ramo": ramo,
-            "monto": round(monto, 2),
-            "porcentaje": round(monto / prima_colocada_total * 100, 2) if prima_colocada_total else 0.0,
-        }
-        for ramo, monto in prima_por_ramo.items()
-    ]
+    distribucion_ramo_emisiones = construir_distribucion_ramo_emisiones(
+        stats_ramo, stats_ramo_sub, stats_empresa_accidentes, prima_colocada_total, polizas_emitidas_total,
+    )
 
     return {
         "polizas_emitidas_total": polizas_emitidas_total,

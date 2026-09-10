@@ -22,11 +22,18 @@ from app.dependencias.sf_service import es_error_sesion, reautenticar_salesforce
 from app.services.trazabilidad_asesor import (
     LEAD_FIELDS,
     OPPORTUNITY_FIELDS,
+    RAMO_CON_DESGLOSE_EMPRESA,
     RAMOS_VALIDOS,
     _MAX_IDS_POR_LOTE,
+    _acumular_bucket,
+    _bucket_vacio,
+    _clasificar_empresa,
+    _clave_sub_ramo,
     _limpiar_registro,
     _normalizar_str,
     _parsear_fecha,
+    agregar_distribucion_ramo_emisiones,
+    construir_distribucion_ramo_emisiones,
     consultar_cuentas_en_lote,
     consultar_folios_en_lote,
     construir_items_unificada,
@@ -395,7 +402,9 @@ def calcular_metricas_asesor(
     cotizaciones_generadas = 0
     polizas_emitidas = 0
     prima_colocada_total = 0.0
-    prima_por_ramo = {r: 0.0 for r in RAMOS_VALIDOS}
+    stats_ramo = {r: _bucket_vacio() for r in RAMOS_VALIDOS}
+    stats_ramo_sub: Dict[str, Dict[str, Dict[str, Any]]] = {r: {} for r in RAMOS_VALIDOS}
+    stats_empresa_accidentes: Dict[str, Dict[str, Any]] = {}
     dias_emision = []
     origenes: Dict[str, Dict[str, int]] = {}
 
@@ -420,6 +429,7 @@ def calcular_metricas_asesor(
 
     for item in items:
         prospecto = item.get("prospecto")
+        cuenta = item.get("cuenta")
         prospecto_en_rango = prospecto is not None and _fecha_en_rango(
             prospecto.get("created_date"), inicio, fin
         )
@@ -485,8 +495,15 @@ def calcular_metricas_asesor(
                     monto = folio.get("poliza_prima_total") or 0.0
                     prima_colocada_total += monto
                     ramo = folio.get("ramo")
-                    if ramo in prima_por_ramo:
-                        prima_por_ramo[ramo] += monto
+                    if ramo in stats_ramo:
+                        _acumular_bucket(stats_ramo, ramo, monto, opp_en_rango)
+
+                        sub_ramo = _clave_sub_ramo(ramo, folio)
+                        _acumular_bucket(stats_ramo_sub[ramo], sub_ramo, monto, opp_en_rango)
+
+                        if ramo == RAMO_CON_DESGLOSE_EMPRESA:
+                            empresa = _clasificar_empresa(cuenta)
+                            _acumular_bucket(stats_empresa_accidentes, empresa, monto, opp_en_rango)
 
                     poliza_status = (folio.get("poliza_status") or "").strip().lower()
                     if poliza_status == "cancelado":
@@ -559,14 +576,9 @@ def calcular_metricas_asesor(
         for origen, datos in sorted(origenes.items(), key=lambda x: x[1]["total"], reverse=True)
     ]
 
-    distribucion_ramo_emisiones = [
-        {
-            "ramo": ramo,
-            "monto": round(monto, 2),
-            "porcentaje": round(monto / prima_colocada_total * 100, 2) if prima_colocada_total else 0.0,
-        }
-        for ramo, monto in prima_por_ramo.items()
-    ]
+    distribucion_ramo_emisiones = construir_distribucion_ramo_emisiones(
+        stats_ramo, stats_ramo_sub, stats_empresa_accidentes, prima_colocada_total, polizas_emitidas,
+    )
 
     return {
         "metricas_operativas": {
@@ -831,22 +843,15 @@ def calcular_resumen_general(asesores: List[Dict[str, Any]]) -> Dict[str, Any]:
     )
     ticket_promedio_prima_global = round(prima_colocada_total / polizas_emitidas, 2) if polizas_emitidas else 0.0
 
-    # Distribución de ramo homologada con el endpoint por-asesor: se lee de
+    # Distribución de ramo homologada con el endpoint por-asesor: se
+    # re-agrega (incluyendo sub_ramo y empresa) a partir de
     # produccion_periodo_cierre.distribucion_ramo_emisiones de cada asesor
     # (ya no hay un desglose_prima_ramo por separado — era el mismo dato).
-    prima_por_ramo_totales = {r: 0.0 for r in RAMOS_VALIDOS}
-    for a in asesores:
-        for entry in a["produccion_periodo_cierre"]["distribucion_ramo_emisiones"]:
-            if entry["ramo"] in prima_por_ramo_totales:
-                prima_por_ramo_totales[entry["ramo"]] += entry["monto"]
-    distribucion_ramo_emisiones_global = [
-        {
-            "ramo": ramo,
-            "monto": round(monto, 2),
-            "porcentaje": round(monto / prima_colocada_total * 100, 2) if prima_colocada_total else 0.0,
-        }
-        for ramo, monto in prima_por_ramo_totales.items()
-    ]
+    distribucion_ramo_emisiones_global = agregar_distribucion_ramo_emisiones(
+        [a["produccion_periodo_cierre"]["distribucion_ramo_emisiones"] for a in asesores],
+        prima_colocada_total,
+        polizas_emitidas,
+    )
 
     return {
         "totales_operativos": {

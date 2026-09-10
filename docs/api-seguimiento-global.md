@@ -113,7 +113,9 @@ Agrega los totales de la empresa sobre **todos** los asesores que cumplen los fi
 
 #### `produccion_periodo_cierre`
 
-Mismos campos y significado que en el [endpoint por-asesor](./api-seguimiento-asesor.md), pero sumados entre todos los asesores del filtro: `polizas_emitidas_total`, `prima_colocada_total`, `dias_promedio_emision`, `total_canceladas`, `total_vigentes`, `ticket_promedio_prima`, `composicion_origen_emisiones` (`pct_origen_prospectos`/`pct_origen_cuentas_existentes` = % de pólizas emitidas del periodo que vinieron de prospectos nuevos / de cuentas existentes), `composicion_inmediatez_emisiones` (`pct_mismo_periodo`/`pct_arrastre_pasado` = % de emisiones del periodo negociadas en este mismo mes / en meses pasados), y `distribucion_ramo_emisiones` (mezcla porcentual de la prima emitida de caja distribuida por ramo).
+Mismos campos y significado que en el [endpoint por-asesor](./api-seguimiento-asesor.md), pero sumados entre todos los asesores del filtro: `polizas_emitidas_total`, `prima_colocada_total`, `dias_promedio_emision`, `total_canceladas`, `total_vigentes`, `ticket_promedio_prima`, `composicion_origen_emisiones` (`pct_origen_prospectos`/`pct_origen_cuentas_existentes` = % de pólizas emitidas del periodo que vinieron de prospectos nuevos / de cuentas existentes), `composicion_inmediatez_emisiones` (`pct_mismo_periodo`/`pct_arrastre_pasado` = % de emisiones del periodo negociadas en este mismo mes / en meses pasados), y `distribucion_ramo_emisiones` (desglose de la prima emitida por ramo, con su composición interna por sub_ramo/producto y, en ACCIDENTES Y ENFERMEDADES, por empresa — cada bucket trae monto y conteo de pólizas, partidos por mismo periodo/arrastre; ver el shape completo `MetricasBucketEmision` y la fuente de campo por ramo en el endpoint por-asesor).
+
+`distribucion_ramo_emisiones` (y sus desgloses anidados) se re-agrega sumando los valores crudos de cada asesor (montos y conteos, tanto totales como partidos por mismo_periodo/arrastre_pasado) y recalculando los porcentajes sobre esa suma — nunca promediando los porcentajes ya redondeados de cada asesor.
 
 #### `gestion_cohorte_creacion`
 
@@ -230,9 +232,148 @@ Respuesta (resumida):
         "composicion_origen_emisiones": { "prospectos_nuevos": 34, "cuentas_existentes": 437, "pct_origen_prospectos": 7.22, "pct_origen_cuentas_existentes": 92.78 },
         "composicion_inmediatez_emisiones": { "mismo_periodo": 301, "arrastre_pasado": 170, "pct_mismo_periodo": 63.91, "pct_arrastre_pasado": 36.09 },
         "distribucion_ramo_emisiones": [
-          { "ramo": "DAÑOS", "monto": 3296192.13, "porcentaje": 49.18 },
-          { "ramo": "ACCIDENTES Y ENFERMEDADES", "monto": 1786920.2, "porcentaje": 26.66 },
-          { "ramo": "VIDA", "monto": 1618621.0, "porcentaje": 24.15 }
+          {
+            "ramo": "DAÑOS",
+            "monto": 3296192.13,
+            "porcentaje": 49.18,
+            "emitidas": 300,
+            "porcentaje_emitidas": 63.69,
+            "emitidas_mismo_periodo": 192,
+            "emitidas_arrastre_pasado": 108,
+            "prima_mismo_periodo": 2109562.96,
+            "prima_arrastre_pasado": 1186629.17,
+            "prima_total": 3296192.13,
+            "distribucion_sub_ramo": [
+              {
+                "sub_ramo": "AUTOMÓVILES",
+                "monto": 2900000.0,
+                "porcentaje": 87.97,
+                "emitidas": 264,
+                "porcentaje_emitidas": 88.0,
+                "emitidas_mismo_periodo": 169,
+                "emitidas_arrastre_pasado": 95,
+                "prima_mismo_periodo": 1856000.0,
+                "prima_arrastre_pasado": 1044000.0,
+                "prima_total": 2900000.0
+              },
+              {
+                "sub_ramo": "HOGAR",
+                "monto": 396192.13,
+                "porcentaje": 12.03,
+                "emitidas": 36,
+                "porcentaje_emitidas": 12.0,
+                "emitidas_mismo_periodo": 23,
+                "emitidas_arrastre_pasado": 13,
+                "prima_mismo_periodo": 253562.96,
+                "prima_arrastre_pasado": 142629.17,
+                "prima_total": 396192.13
+              }
+            ],
+            "distribucion_empresa": []
+          },
+          {
+            "ramo": "ACCIDENTES Y ENFERMEDADES",
+            "monto": 1786920.2,
+            "porcentaje": 26.66,
+            "emitidas": 120,
+            "porcentaje_emitidas": 25.48,
+            "emitidas_mismo_periodo": 80,
+            "emitidas_arrastre_pasado": 40,
+            "prima_mismo_periodo": 1200000.0,
+            "prima_arrastre_pasado": 586920.2,
+            "prima_total": 1786920.2,
+            "distribucion_sub_ramo": [
+              {
+                "sub_ramo": "GASTOS MÉDICOS MAYORES",
+                "monto": 1786920.2,
+                "porcentaje": 100.0,
+                "emitidas": 120,
+                "porcentaje_emitidas": 100.0,
+                "emitidas_mismo_periodo": 80,
+                "emitidas_arrastre_pasado": 40,
+                "prima_mismo_periodo": 1200000.0,
+                "prima_arrastre_pasado": 586920.2,
+                "prima_total": 1786920.2
+              }
+            ],
+            "distribucion_empresa": [
+              {
+                "empresa": "GRUPO BIMBO, S.A.B. DE C.V.",
+                "monto": 900000.0,
+                "porcentaje": 50.37,
+                "emitidas": 60,
+                "porcentaje_emitidas": 50.0,
+                "emitidas_mismo_periodo": 40,
+                "emitidas_arrastre_pasado": 20,
+                "prima_mismo_periodo": 600000.0,
+                "prima_arrastre_pasado": 300000.0,
+                "prima_total": 900000.0
+              },
+              {
+                "empresa": "SINDICATO DE TELEFONISTAS DE LA REPÚBLICA MEXICANA",
+                "monto": 500000.0,
+                "porcentaje": 27.98,
+                "emitidas": 35,
+                "porcentaje_emitidas": 29.17,
+                "emitidas_mismo_periodo": 25,
+                "emitidas_arrastre_pasado": 10,
+                "prima_mismo_periodo": 400000.0,
+                "prima_arrastre_pasado": 100000.0,
+                "prima_total": 500000.0
+              },
+              {
+                "empresa": "OTROS",
+                "monto": 386920.2,
+                "porcentaje": 21.65,
+                "emitidas": 25,
+                "porcentaje_emitidas": 20.83,
+                "emitidas_mismo_periodo": 15,
+                "emitidas_arrastre_pasado": 10,
+                "prima_mismo_periodo": 200000.0,
+                "prima_arrastre_pasado": 186920.2,
+                "prima_total": 386920.2
+              }
+            ]
+          },
+          {
+            "ramo": "VIDA",
+            "monto": 1618621.0,
+            "porcentaje": 24.15,
+            "emitidas": 51,
+            "porcentaje_emitidas": 10.83,
+            "emitidas_mismo_periodo": 33,
+            "emitidas_arrastre_pasado": 18,
+            "prima_mismo_periodo": 1048621.0,
+            "prima_arrastre_pasado": 570000.0,
+            "prima_total": 1618621.0,
+            "distribucion_sub_ramo": [
+              {
+                "sub_ramo": "VIDAMAS",
+                "monto": 1000000.0,
+                "porcentaje": 61.78,
+                "emitidas": 32,
+                "porcentaje_emitidas": 62.75,
+                "emitidas_mismo_periodo": 21,
+                "emitidas_arrastre_pasado": 11,
+                "prima_mismo_periodo": 650000.0,
+                "prima_arrastre_pasado": 350000.0,
+                "prima_total": 1000000.0
+              },
+              {
+                "sub_ramo": "VIDA INDIVIDUAL",
+                "monto": 618621.0,
+                "porcentaje": 38.22,
+                "emitidas": 19,
+                "porcentaje_emitidas": 37.25,
+                "emitidas_mismo_periodo": 12,
+                "emitidas_arrastre_pasado": 7,
+                "prima_mismo_periodo": 398621.0,
+                "prima_arrastre_pasado": 220000.0,
+                "prima_total": 618621.0
+              }
+            ],
+            "distribucion_empresa": []
+          }
         ]
       },
       "gestion_cohorte_creacion": { "leads_registrados": 416, "oportunidades_generadas": 851, "emisiones_mismo_periodo": 302, "oportunidades_en_proceso": 456, "oportunidades_no_emitidas": 93 },

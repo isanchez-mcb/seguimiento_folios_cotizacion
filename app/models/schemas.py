@@ -157,6 +157,7 @@ class ProspectoInfo(BaseModel):
 class CuentaInfo(BaseModel):
     account_id: Optional[str] = None
     account_name: Optional[str] = None
+    negocio: Optional[str] = None
     created_by_name: Optional[str] = None
     created_date: Optional[str] = None
 
@@ -329,10 +330,47 @@ class ComposicionInmediatezEmisiones(BaseModel):
     pct_arrastre_pasado: float = 0.0
 
 
-class DistribucionRamoEmision(BaseModel):
-    ramo: str
+class MetricasBucketEmision(BaseModel):
+    """
+    Métricas comunes a cualquier bucket de distribucion_ramo_emisiones
+    (el ramo mismo, y sus desgloses anidados por sub_ramo/empresa): monto y
+    conteo de pólizas emitidas, ambos partidos por mismo_periodo/arrastre_pasado.
+    `porcentaje`/`porcentaje_emitidas` son relativos al total general en las
+    entradas de nivel ramo, y al monto/conteo del ramo padre en los desgloses
+    anidados (sub_ramo/empresa) — reflejan la composición interna del ramo,
+    no su peso contra el total general.
+    """
     monto: float = 0.0
     porcentaje: float = 0.0
+    emitidas: int = 0
+    porcentaje_emitidas: float = 0.0
+    emitidas_mismo_periodo: int = 0
+    emitidas_arrastre_pasado: int = 0
+    prima_mismo_periodo: float = 0.0
+    prima_arrastre_pasado: float = 0.0
+    prima_total: float = 0.0
+
+
+class DistribucionSubRamo(MetricasBucketEmision):
+    """
+    Desglose granular dentro de un ramo: Sub_ramos__c del folio, excepto en
+    VIDA, donde se usa Producto_polizas__c en su lugar.
+    """
+    sub_ramo: str
+
+
+class DistribucionEmpresa(MetricasBucketEmision):
+    """
+    Desglose por Account.Negocio__c, solo dentro del ramo ACCIDENTES Y
+    ENFERMEDADES.
+    """
+    empresa: str
+
+
+class DistribucionRamoEmision(MetricasBucketEmision):
+    ramo: str
+    distribucion_sub_ramo: List[DistribucionSubRamo] = []
+    distribucion_empresa: List[DistribucionEmpresa] = []
 
 
 class ProduccionPeriodoCierre(BaseModel):
