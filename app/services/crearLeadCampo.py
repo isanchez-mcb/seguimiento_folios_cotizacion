@@ -209,7 +209,7 @@ def _crear_oportunidad_contingencia(
         'OwnerId': owner_id,
         'StageName': 'Nueva',
         'CloseDate': close_date,
-        'Origen_de_oportunidad__c': 'Venta en Campo',
+        'Origen_de_oportunidad__c': 'Trabajo en Campo',
         'RecordTypeId': record_type_id,
         'Asesor_externo__c': asesor_data['Id'],
     }
