@@ -149,8 +149,8 @@ class CrearFolioResponse(BaseModel):
     mensaje: str
 
 class AccountEmailChangedRequest(BaseModel):
-    account_id: str
-    account_name: str
+    account_id: Optional[str] = None
+    account_name: Optional[str] = None
     old_email: Optional[str] = None
     new_email: Optional[str] = None
 
