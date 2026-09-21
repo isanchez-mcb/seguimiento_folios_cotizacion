@@ -7,6 +7,8 @@ from app.dependencias.security import verifiy_auth
 
 router = APIRouter()
 
+PUESTO_EJECUTIVO_NN = "Ejecutivo NN"
+
 
 @router.get("/asesores-externos/buscar", response_model=AsesorExternoResponse, status_code=200, tags=["Asesores Externos"])
 def buscar_asesor_externo_endpoint(
@@ -31,15 +33,18 @@ def buscar_asesor_externo_endpoint(
         )
 
     # ── Corroborar si el asesor tiene una cuenta de usuario activa en Salesforce ──
-    user_id = verificar_cuenta_usuario(numero_asesor.strip(), sf)
-    if user_id is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"El asesor con número {numero_asesor} no tiene una cuenta "
-                "de usuario activa en Salesforce. Favor de verificar con el administrador."
+    # Excepción: los asesores de Nuevos Negocios (Puesto__c = "Ejecutivo NN") no
+    # requieren cuenta de usuario activa, basta con existir como Asesor_externo__c.
+    if asesor.get('Puesto__c') != PUESTO_EJECUTIVO_NN:
+        user_id = verificar_cuenta_usuario(numero_asesor.strip(), sf)
+        if user_id is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"El asesor con número {numero_asesor} no tiene una cuenta "
+                    "de usuario activa en Salesforce. Favor de verificar con el administrador."
+                )
             )
-        )
 
     print("Asesor externo encontrado")
     return asesor
