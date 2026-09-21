@@ -468,7 +468,7 @@ def notificar_asignacion(
     lead_data: dict,
     ramo: str,
     id_lead: str = "",
-    lider_id: str = "005ct00000FwEpxAAF", #005WR000008PRlCYAW, 005WR00000CO8C1YAL <-Asesor, 005ct00000FwEpxAAF <- sb
+    lider_id: str = "005WR00000CO8C1YAL", #005WR000008PRlCYAW, 005WR00000CO8C1YAL <-Asesor, 005ct00000FwEpxAAF <- sb
 ) -> bool:
     """
     Orquesta el envío de correo cuando se asigna un lead a un asesor.
