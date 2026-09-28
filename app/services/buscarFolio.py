@@ -37,7 +37,7 @@ def buscar_folio(CaseNumber: str, sf: Salesforce) -> str:
         ZerosSize = 8 - len(CaseNumber)
         CaseNumber = ZerosSize*"0" + CaseNumber
     try:
-        query = f"SELECT CreatedDate, Case.Account.No_expediente_No_colaborador__c, Case.Account.Name, Case.Tipo_de_movimiento__c, Case.P_liza_de_seguro__r.Aseguradora__c, Case.P_liza_de_seguro__r.Producto__c, Case.P_liza_de_seguro__r.Ramos__c, Case.P_liza_de_seguro__r.Sub_ramos__c, Case.P_liza_de_seguro__r.Negocio__c, NewValue, Case.Status, Case.CreatedDate, Case.RecordType.Name, Case.CaseNumber FROM CaseHistory WHERE Field = 'Status' and Case.RecordType.Name NOT IN ('7.- Posible cancelación') and case.casenumber = '{CaseNumber}'"
+        query = f"SELECT Case.Id, CreatedDate, Case.Account.No_expediente_No_colaborador__c, Case.Account.Name, Case.Tipo_de_movimiento__c, Case.Ramo__c, Case.Sub_ramos__c, Case.Negocio_asociado__c, Case.P_liza_de_seguro__r.Aseguradora__c, Case.P_liza_de_seguro__r.Producto__c, Case.P_liza_de_seguro__r.Ramos__c, Case.P_liza_de_seguro__r.Sub_ramos__c, Case.P_liza_de_seguro__r.Negocio__c, NewValue, Case.Status, Case.CreatedDate, Case.RecordType.Name, Case.CaseNumber FROM CaseHistory WHERE Field = 'Status' and Case.RecordType.Name NOT IN ('7.- Posible cancelación') and case.casenumber = '{CaseNumber}'"
         result = sf.query(query)
         print(result)
         if result['totalSize'] == 0:
@@ -47,7 +47,7 @@ def buscar_folio(CaseNumber: str, sf: Salesforce) -> str:
             # el Case directamente antes de asumir que no existe.
             return buscar_folio_creado(CaseNumber, sf)
         else:
-            result = formatear_folio(result)
+            result = formatear_folio(result, sf)
             return result
     except Exception as e:
         print(f"Error {e}")
@@ -65,8 +65,9 @@ def buscar_folio_creado(CaseNumber: str, sf: Salesforce) -> Optional[Dict[str, A
     """
     try:
         query = (
-            "SELECT CreatedDate, Account.No_expediente_No_colaborador__c, Account.Name, "
-            "Tipo_de_movimiento__c, P_liza_de_seguro__r.Aseguradora__c, P_liza_de_seguro__r.Producto__c, "
+            "SELECT Id, CreatedDate, Account.No_expediente_No_colaborador__c, Account.Name, "
+            "Tipo_de_movimiento__c, Ramo__c, Sub_ramos__c, Negocio_asociado__c, "
+            "P_liza_de_seguro__r.Aseguradora__c, P_liza_de_seguro__r.Producto__c, "
             "P_liza_de_seguro__r.Ramos__c, P_liza_de_seguro__r.Sub_ramos__c, P_liza_de_seguro__r.Negocio__c, "
             "Status, RecordType.Name, CaseNumber "
             "FROM Case "
@@ -76,13 +77,48 @@ def buscar_folio_creado(CaseNumber: str, sf: Salesforce) -> Optional[Dict[str, A
         result = sf.query(query)
         if result['totalSize'] == 0:
             return None
-        return formatear_folio_creado(result['records'][0])
+        return formatear_folio_creado(result['records'][0], sf)
     except Exception as e:
         print(f"Error {e}")
         return None
 
 
-def formatear_folio_creado(case_data: Dict[str, Any]) -> Dict[str, Any]:
+def _obtener_datos_motivo_folio(sf: Salesforce, case_id: Optional[str]) -> Dict[str, Any]:
+    """
+    Para folios de Contacto: Aseguradora/Producto/Tipo_movimiento no viven en
+    el Case (no tiene P_liza_de_seguro__c ni Tipo_de_movimiento__c útiles).
+    Ese dato vive en Motivo_de_folio__c, asociado al Case por Folio__c:
+    - Etiqueta__r.Name reemplaza a Tipo_movimiento.
+    - Poliza_de_seguro__r.Aseguradora__c / Producto__c, solo si el folio
+      tiene una póliza asociada (puede no tenerla).
+    """
+    if not case_id:
+        return {}
+    try:
+        query = (
+            "SELECT Etiqueta__r.Name, Poliza_de_seguro__r.Aseguradora__c, "
+            "Poliza_de_seguro__r.Producto__c "
+            "FROM Motivo_de_folio__c "
+            f"WHERE Folio__c = '{case_id}' "
+            "LIMIT 1"
+        )
+        result = sf.query(query)
+        if result['totalSize'] == 0:
+            return {}
+        record = result['records'][0]
+        etiqueta = record.get('Etiqueta__r') or {}
+        poliza = record.get('Poliza_de_seguro__r') or {}
+        return {
+            'tipo_movimiento': etiqueta.get('Name'),
+            'aseguradora': poliza.get('Aseguradora__c'),
+            'producto': poliza.get('Producto__c'),
+        }
+    except Exception as e:
+        print(f"Error al obtener Motivo_de_folio__c del case {case_id}: {e}")
+        return {}
+
+
+def formatear_folio_creado(case_data: Dict[str, Any], sf: Salesforce) -> Dict[str, Any]:
     """
     Arma la respuesta (mismo formato que formatear_folio) para un Case sin
     CaseHistory de Status todavía, mostrando su etapa inicial como
@@ -102,6 +138,20 @@ def formatear_folio_creado(case_data: Dict[str, Any]) -> Dict[str, Any]:
     ramo = poliza_data.get('Ramos__c') or "SIN INFORMACIÓN"
     sub_ramo = poliza_data.get('Sub_ramos__c') or "SIN INFORMACIÓN"
     tipo_movimiento = case_data.get('Tipo_de_movimiento__c') or "SIN INFORMACIÓN"
+
+    # Los folios de Contacto no tienen P_liza_de_seguro__c ni
+    # Tipo_de_movimiento__c útiles en el Case: Ramo__c/Sub_ramos__c/
+    # Negocio_asociado__c sí están directo en el Case, y el motivo/
+    # aseguradora/producto viven en Motivo_de_folio__c.
+    if tipo_folio == 'Contacto':
+        ramo = case_data.get('Ramo__c') or "SIN INFORMACIÓN"
+        sub_ramo = case_data.get('Sub_ramos__c') or "SIN INFORMACIÓN"
+        negocio = case_data.get('Negocio_asociado__c') or "SIN INFORMACIÓN"
+
+        motivo = _obtener_datos_motivo_folio(sf, case_data.get('Id'))
+        tipo_movimiento = motivo.get('tipo_movimiento') or "SIN INFORMACIÓN"
+        aseguradora = motivo.get('aseguradora') or "SIN INFORMACIÓN"
+        producto = motivo.get('producto') or "SIN INFORMACIÓN"
 
     max_dias = ''
     try:
@@ -125,19 +175,27 @@ def formatear_folio_creado(case_data: Dict[str, Any]) -> Dict[str, Any]:
     created_day = dateutil.parser.parse(created_day)
     days_passed = calcular_dias(created_day, current_day)
 
-    if max_dias == '':
-        dias_restantes = "SIN INFORMACIÓN"
-        max_dias = "SIN INFORMACIÓN"
-    else:
-        dias_restantes = max_dias - days_passed
-        dias_restantes = "ATRASADO" if dias_restantes <= 0 else dias_restantes
-
     # Resolver 'Status' con la misma tabla de mapeo que usa formatear_folio;
     # si el status actual no estuviera mapeado, se muestra 'Recibido' por default
     # (en este punto el Case no tiene historial, así que apenas va comenzando).
     status_dict_name = tipo_folios.recordType_map.get(tipo_folio)
     status_dict = getattr(tipo_folios, status_dict_name, {}) if status_dict_name else {}
     status_cliente = status_dict.get(case_data.get('Status'), 'Recibido')
+
+    if max_dias == '':
+        max_dias = "SIN INFORMACIÓN"
+
+    if status_cliente == 'Solicitud Finalizada':
+        # Un folio ya finalizado no puede estar "ATRASADO": esto puede pasar
+        # aunque no tenga CaseHistory de Status (ej. si nunca se generó un
+        # registro de historial pese a que el Status sí cambió).
+        days_passed = "Finalizado"
+        dias_restantes = "Finalizado"
+    elif max_dias == "SIN INFORMACIÓN":
+        dias_restantes = "SIN INFORMACIÓN"
+    else:
+        dias_restantes = max_dias - days_passed
+        dias_restantes = "ATRASADO" if dias_restantes <= 0 else dias_restantes
 
     case_info = {
         'No_colaborador': no_colaborador,
@@ -168,7 +226,7 @@ def formatear_folio_creado(case_data: Dict[str, Any]) -> Dict[str, Any]:
         "Case_History": case_history
     }
 
-def formatear_folio(case_list: Dict[str, Any]) -> list[Dict[str, Any]]:
+def formatear_folio(case_list: Dict[str, Any], sf: Salesforce) -> list[Dict[str, Any]]:
     if not case_list:
         return []
     records = case_list['records']
@@ -196,14 +254,17 @@ def formatear_folio(case_list: Dict[str, Any]) -> list[Dict[str, Any]]:
             tipo_movimiento = "SIN INFORMACIÓN"
             max_dias = ''
             try:
-                aseguradora_data = case_data.get('P_liza_de_seguro__r', {}).get('Aseguradora__c')
-                producto_data = case_data.get('P_liza_de_seguro__r', {}).get('Producto__c')
-                negocio_data = case_data.get('P_liza_de_seguro__r', {}).get('Negocio__c')
+                poliza_data = case_data.get('P_liza_de_seguro__r', {}) or {}
+                account_data = case_data.get('Account', {}) or {}
+
+                aseguradora_data = poliza_data.get('Aseguradora__c')
+                producto_data = poliza_data.get('Producto__c')
+                negocio_data = poliza_data.get('Negocio__c')
                 tipo_movimiento_data = case_data.get('Tipo_de_movimiento__c')
-                ramo_data = case_data.get('P_liza_de_seguro__r', {}).get('Ramos__c')
-                subramo_data = case_data.get('P_liza_de_seguro__r', {}).get('Sub_ramos__c')
-                no_colaborador_data = case_data.get('Account', {}).get('No_expediente_No_colaborador__c')
-                nombre_data = case_data.get('Account', {}).get('Name')
+                ramo_data = poliza_data.get('Ramos__c')
+                subramo_data = poliza_data.get('Sub_ramos__c')
+                no_colaborador_data = account_data.get('No_expediente_No_colaborador__c')
+                nombre_data = account_data.get('Name')
 
                 aseguradora = aseguradora_data if aseguradora_data is not None else "SIN INFORMACIÓN"
                 producto = producto_data if producto_data is not None else "SIN INFORMACIÓN"
@@ -226,6 +287,20 @@ def formatear_folio(case_list: Dict[str, Any]) -> list[Dict[str, Any]]:
                             max_dias = dias_por_negocio.get(tipo_movimiento, '')
             except:
                 max_dias = ''
+
+            # Los folios de Contacto no tienen P_liza_de_seguro__c ni
+            # Tipo_de_movimiento__c útiles en el Case: Ramo__c/Sub_ramos__c/
+            # Negocio_asociado__c sí están directo en el Case, y el motivo/
+            # aseguradora/producto viven en Motivo_de_folio__c.
+            if tipo_folio == 'Contacto':
+                ramo = case_data.get('Ramo__c') or "SIN INFORMACIÓN"
+                sub_ramo = case_data.get('Sub_ramos__c') or "SIN INFORMACIÓN"
+                negocio = case_data.get('Negocio_asociado__c') or "SIN INFORMACIÓN"
+
+                motivo = _obtener_datos_motivo_folio(sf, case_data.get('Id'))
+                tipo_movimiento = motivo.get('tipo_movimiento') or "SIN INFORMACIÓN"
+                aseguradora = motivo.get('aseguradora') or "SIN INFORMACIÓN"
+                producto = motivo.get('producto') or "SIN INFORMACIÓN"
 
             # Los folios de Contacto no tienen póliza asociada (nunca calzan
             # en el catálogo de arriba); su máximo de atención es fijo: 1 día.

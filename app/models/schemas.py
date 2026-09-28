@@ -124,7 +124,6 @@ class FolioCuentaItem(BaseModel):
     CaseNumber: Optional[str] = None
     Estado: Optional[str] = None
     Tipo_movimiento: Optional[str] = None
-    #Poliza_asociada: Optional[str] = None
     Tipo: Optional[str] = None
     Fecha_creacion: Optional[datetime] = None
 

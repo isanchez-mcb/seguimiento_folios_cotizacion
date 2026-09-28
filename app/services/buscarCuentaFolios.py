@@ -106,7 +106,7 @@ def obtener_folios_de_cuenta(sf: Salesforce, account_id: str) -> list:
     """
     Recupera el listado resumido de folios (Case) asociados a una cuenta, en
     una sola consulta (igual que el servicio de referencia /cuentas/folios):
-    CaseNumber, Estado, Tipo_movimiento, Poliza_asociada, Tipo, Fecha_creacion.
+    CaseNumber, Estado, Tipo_movimiento, Tipo, Fecha_creacion.
 
     El Estado se traduce con el mismo catálogo que usa buscar_folio()
     (tipo_folios.recordType_map), sin llamar a buscar_folio() por cada Case
@@ -118,7 +118,7 @@ def obtener_folios_de_cuenta(sf: Salesforce, account_id: str) -> list:
     """
     query = (
         "SELECT Id, CaseNumber, Status, Tipo_de_movimiento__c, "
-        "P_liza_de_seguro__r.Name, CreatedDate, RecordType.Name "
+        "CreatedDate, RecordType.Name "
         "FROM Case "
         f"WHERE AccountId = '{account_id}' "
         "AND RecordType.Name NOT IN ('7.- Posible cancelación') "
@@ -154,8 +154,6 @@ def obtener_folios_de_cuenta(sf: Salesforce, account_id: str) -> list:
         status_dict = getattr(tipo_folios, status_dict_name, {}) if status_dict_name else {}
         estado = status_dict.get(r.get("Status"), r.get("Status"))
 
-        poliza = r.get("P_liza_de_seguro__r") or {}
-
         fecha_creacion = r.get("CreatedDate")
         if fecha_creacion:
             fecha_creacion = dateutil.parser.parse(ajustar_horas(fecha_creacion))
@@ -164,7 +162,6 @@ def obtener_folios_de_cuenta(sf: Salesforce, account_id: str) -> list:
             "CaseNumber": r.get("CaseNumber"),
             "Estado": estado,
             "Tipo_movimiento": tipo_movimiento,
-            #"Poliza_asociada": poliza.get("Name"),
             "Tipo": tipo_folio,
             "Fecha_creacion": fecha_creacion,
         })

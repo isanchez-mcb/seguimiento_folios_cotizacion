@@ -18,14 +18,13 @@ from app.services.sf_create_data import crear_nota_generica, crear_tarea_folio, 
 
 # ─── Constantes ───────────────────────────────────────────────────
 
-RECORD_TYPE_CASE = "3.- Mantenimiento"
 RECORD_TYPE_CONTACTO = "9.- Contacto"
 OFICINA = "MCB Cervantes"
 ORIGEN_DEFAULT = "Lucia"
-COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
-#COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
-OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
-#OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
+#COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
+COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
+#OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
+OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
 #OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
 
@@ -80,12 +79,13 @@ def _buscar_poliza_cuenta(
         sf: Instancia autenticada de Salesforce.
 
     Returns:
-        Dict con la póliza encontrada (Id, Name, EffectiveDate), o None.
+        Dict con la póliza encontrada (Id, Name, EffectiveDate, Ramos__c,
+        Sub_ramos__c), o None.
     """
     es_gmm = bool(ramo and ramo.strip().upper() == "GMM")
 
     # ── 1. Consultar pólizas de la cuenta ────────────────────────
-    campos = "Id, Name, EffectiveDate"
+    campos = "Id, Name, EffectiveDate, Ramos__c, Sub_ramos__c"
     if es_gmm:
         campos += ", Numero_de_endoso__c"
 
@@ -216,14 +216,17 @@ def _obtener_etiqueta_motivo_id(sf: Salesforce, nombre_etiqueta: str) -> str:
     return result['records'][0]['Etiqueta__c']
 
 
-def _crear_motivo_folio(case_id: str, etiqueta_id: str, sf: Salesforce) -> bool:
+def _crear_motivo_folio(case_id: str, etiqueta_id: str, owner_id: str, sf: Salesforce, poliza_id: Optional[str] = None) -> bool:
     """
     Crea un Motivo_de_folio__c asociado al Case, con la etiqueta resuelta.
 
     Args:
         case_id: ID del Case (Folio__c).
         etiqueta_id: ID de Etiqueta__c a asignar.
+        owner_id: ID del propietario, el mismo asignado al Case del folio.
         sf: Instancia autenticada de Salesforce.
+        poliza_id: ID de la InsurancePolicy localizada (Poliza_de_seguro__c),
+            si se encontró una; None si el folio no tiene póliza asociada.
 
     Returns:
         True si se creó correctamente, False en caso contrario.
@@ -232,7 +235,11 @@ def _crear_motivo_folio(case_id: str, etiqueta_id: str, sf: Salesforce) -> bool:
         motivo_data = {
             'Folio__c': case_id,
             'Etiqueta__c': etiqueta_id,
+            'OwnerId': owner_id,
         }
+        if poliza_id:
+            motivo_data['Poliza_de_seguro__c'] = poliza_id
+
         sf.Motivo_de_folio__c.create(motivo_data)
         print(f"Motivo_de_folio__c creado para case {case_id} con Etiqueta__c {etiqueta_id}")
         return True
@@ -314,19 +321,24 @@ def crear_folio_seguimiento(
     sf: Salesforce
 ) -> Tuple[str, Optional[str], Optional[str], str]:
     """
-    Crea un folio de seguimiento (Case) en Salesforce.
+    Crea un folio de seguimiento (Case) en Salesforce. Todos los folios se
+    crean como '9.- Contacto' (ya no existe el folio de Mantenimiento).
 
     Flujo:
     1. Busca la cuenta por expediente (búsqueda en cascada)
     2. Si viene numero_poliza, busca la póliza asociada a la cuenta.
-       - Si se encuentra → folio de Mantenimiento ('3.- Mantenimiento').
-       - Si no viene numero_poliza, o no se encuentra la póliza →
-         folio de contingencia de Contacto ('9.- Contacto'), asociado a la
-         cuenta con Description resumiendo lo recibido en el request.
+       - Si se encuentra, el Case de Contacto se enriquece con Ramo__c y
+         Sub_ramos__c (tomados de la póliza), y el Motivo_de_folio__c que se
+         crea más abajo además lleva Poliza_de_seguro__c.
+       - Si no viene numero_poliza, o no se encuentra la póliza, el Case
+         queda sin esos campos (folio de contingencia, sin cambios respecto
+         a como funcionaba antes).
+       En ambos casos el Case lleva Description resumiendo lo recibido en
+       el request.
     3. Resuelve el asesor asignado (carrusel sobre la cola 'Ejecutivos SAC')
     4. Crea el Case con los datos del folio
-    4.1. Si es folio de Contacto, crea el Motivo_de_folio__c asociado con
-         la Etiqueta__c correspondiente al tipo_movimiento
+    4.1. Crea el Motivo_de_folio__c asociado con la Etiqueta__c
+         correspondiente al tipo_movimiento (y Poliza_de_seguro__c si aplica)
     5. Crea la tarea de seguimiento para el asesor asignado
     6. Crea nota de contacto (correo/teléfono) en el Case
 
@@ -350,33 +362,26 @@ def crear_folio_seguimiento(
     numero_poliza = request.numero_poliza.strip() if request.numero_poliza else ""
     poliza = _buscar_poliza_cuenta(account_id, numero_poliza, request.ramo, sf) if numero_poliza else None
 
-    etiqueta_id = None
+    nombre_record_type = RECORD_TYPE_CONTACTO
+    record_type_id = obtener_record_type_id(sf, 'Case', nombre_record_type)
+
+    nombre_etiqueta = MAPEO_ETIQUETA_MOTIVO.get(request.tipo_movimiento)
+    etiqueta_id = _obtener_etiqueta_motivo_id(sf, nombre_etiqueta)
+
+    correo = request.correo.strip() if request.correo and request.correo.strip() else "no proporcionado"
+    telefono = request.telefono.strip() if request.telefono and request.telefono.strip() else "no proporcionado"
 
     if poliza is not None:
-        nombre_record_type = RECORD_TYPE_CASE
-        record_type_id = obtener_record_type_id(sf, 'Case', nombre_record_type)
-        case_data = {
-            'RecordTypeId': record_type_id,
-            'AccountId': account_id,
-            'P_liza_de_seguro__c': poliza['Id'],
-            'Tipo_de_movimiento__c': request.tipo_movimiento,
-            'Origin': origen,
-            'Oficina__c': OFICINA,
-        }
-    else:
-        print(
-            "No se proporcionó número de póliza o no se encontró; "
-            f"creando folio de contingencia '{RECORD_TYPE_CONTACTO}'."
+        descripcion_contacto = (
+            f"Tipo de movimiento: {request.tipo_movimiento}\n"
+            f"Número de póliza localizada: {poliza.get('Name')}\n"
+            f"Ramo: {request.ramo or 'no especificado'}\n"
+            f"Correo: {correo}\n"
+            f"Teléfono: {telefono}\n"
+            f"Origen: {origen}"
         )
-        nombre_record_type = RECORD_TYPE_CONTACTO
-        record_type_id = obtener_record_type_id(sf, 'Case', nombre_record_type)
-
-        nombre_etiqueta = MAPEO_ETIQUETA_MOTIVO.get(request.tipo_movimiento)
-        etiqueta_id = _obtener_etiqueta_motivo_id(sf, nombre_etiqueta)
-
-        correo = request.correo.strip() if request.correo and request.correo.strip() else "no proporcionado"
-        telefono = request.telefono.strip() if request.telefono and request.telefono.strip() else "no proporcionado"
-
+    else:
+        print("No se proporcionó número de póliza o no se encontró; creando folio de contingencia.")
         descripcion_contacto = (
             f"Solicitud de contacto - Tipo de movimiento: {request.tipo_movimiento}\n"
             f"Número de póliza (no localizada): {numero_poliza or 'no proporcionado'}\n"
@@ -386,11 +391,16 @@ def crear_folio_seguimiento(
             f"Origen: {origen}"
         )
 
-        case_data = {
-            'RecordTypeId': record_type_id,
-            'AccountId': account_id,
-            'Description': descripcion_contacto,
-        }
+    case_data = {
+        'RecordTypeId': record_type_id,
+        'AccountId': account_id,
+        'Oficina__c': OFICINA,
+        'Description': descripcion_contacto,
+    }
+
+    if poliza is not None:
+        case_data['Ramo__c'] = poliza.get('Ramos__c')
+        case_data['Sub_ramos__c'] = poliza.get('Sub_ramos__c')
 
     # ── 3. Resolver asesor asignado por carrusel ('Ejecutivos SAC') ──
     owner_id, nombre_asesor = asignar_propietario_carrusel_folio(sf, origen, nombre_record_type)
@@ -431,9 +441,9 @@ def crear_folio_seguimiento(
     except Exception as e:
         print(f"Error al obtener CaseNumber: {e}")
 
-    # Si es folio de Contacto, registrar el Motivo_de_folio__c resuelto antes de crear el Case
-    if etiqueta_id is not None:
-        _crear_motivo_folio(case_id, etiqueta_id, sf)
+    # Registrar el Motivo_de_folio__c con la etiqueta resuelta (y la póliza, si se encontró),
+    # con el mismo owner asignado al Case del folio.
+    _crear_motivo_folio(case_id, etiqueta_id, owner_id, sf, poliza_id=poliza.get('Id') if poliza is not None else None)
 
     # ── 5. Crear tarea de seguimiento para el asesor asignado ────
     descripcion_tarea = f"Folio de seguimiento ({nombre_record_type}) - Cuenta: {account.get('Name', '')}"
@@ -463,8 +473,8 @@ def crear_folio_seguimiento(
         print(f"Error al notificar asignación del folio {case_id} por correo: {e}")
 
     # ── 8. Notificar confirmación del folio al usuario que lo solicitó ──
-    # El botón "Consultar Folio" solo aplica a folios de Mantenimiento;
-    # los de Contacto no tienen seguimiento público de estatus.
+    # Todos los folios de Contacto ya pueden consultarse públicamente, así
+    # que el botón "Consultar Folio" siempre se muestra.
     try:
         correo_usuario = request.correo.strip() if request.correo and request.correo.strip() else ""
         if correo_usuario and case_number:
@@ -472,7 +482,7 @@ def crear_folio_seguimiento(
                 correo_destinatario=correo_usuario,
                 tipo_tramite=request.tipo_movimiento,
                 numero_folio=case_number,
-                es_mantenimiento=(nombre_record_type == RECORD_TYPE_CASE),
+                es_mantenimiento=True,
             )
         elif correo_usuario and not case_number:
             print(f"No se obtuvo CaseNumber; se omite el correo de confirmación al usuario para el case {case_id}.")
