@@ -37,7 +37,7 @@ def buscar_folio(CaseNumber: str, sf: Salesforce) -> str:
         ZerosSize = 8 - len(CaseNumber)
         CaseNumber = ZerosSize*"0" + CaseNumber
     try:
-        query = f"SELECT CreatedDate, Case.Account.No_expediente_No_colaborador__c, Case.Account.Name, Case.Tipo_de_movimiento__c, Case.P_liza_de_seguro__r.Aseguradora__c, Case.P_liza_de_seguro__r.Producto__c, Case.P_liza_de_seguro__r.Ramos__c, Case.P_liza_de_seguro__r.Sub_ramos__c, Case.P_liza_de_seguro__r.Negocio__c, NewValue, Case.Status, Case.CreatedDate, Case.RecordType.Name, Case.CaseNumber FROM CaseHistory WHERE Field = 'Status' and Case.RecordType.Name NOT IN ('7.- Posible cancelación', '9.- Contacto') and case.casenumber = '{CaseNumber}'"
+        query = f"SELECT CreatedDate, Case.Account.No_expediente_No_colaborador__c, Case.Account.Name, Case.Tipo_de_movimiento__c, Case.P_liza_de_seguro__r.Aseguradora__c, Case.P_liza_de_seguro__r.Producto__c, Case.P_liza_de_seguro__r.Ramos__c, Case.P_liza_de_seguro__r.Sub_ramos__c, Case.P_liza_de_seguro__r.Negocio__c, NewValue, Case.Status, Case.CreatedDate, Case.RecordType.Name, Case.CaseNumber FROM CaseHistory WHERE Field = 'Status' and Case.RecordType.Name NOT IN ('7.- Posible cancelación') and case.casenumber = '{CaseNumber}'"
         result = sf.query(query)
         print(result)
         if result['totalSize'] == 0:
@@ -71,7 +71,7 @@ def buscar_folio_creado(CaseNumber: str, sf: Salesforce) -> Optional[Dict[str, A
             "Status, RecordType.Name, CaseNumber "
             "FROM Case "
             f"WHERE CaseNumber = '{CaseNumber}' "
-            "AND RecordType.Name NOT IN ('7.- Posible cancelación', '9.- Contacto')"
+            "AND RecordType.Name NOT IN ('7.- Posible cancelación')"
         )
         result = sf.query(query)
         if result['totalSize'] == 0:
@@ -115,7 +115,12 @@ def formatear_folio_creado(case_data: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         max_dias = ''
 
-    current_day = datetime.now(timezone.utc)
+    # Los folios de Contacto no tienen póliza asociada (nunca calzan en el
+    # catálogo de arriba); su máximo de atención es fijo: 1 día.
+    if tipo_folio == 'Contacto':
+        max_dias = 1
+
+    current_day = datetime.now(timezone.utc) - timedelta(hours=6)
     created_day = ajustar_horas(case_data.get('CreatedDate'))
     created_day = dateutil.parser.parse(created_day)
     days_passed = calcular_dias(created_day, current_day)
@@ -222,8 +227,12 @@ def formatear_folio(case_list: Dict[str, Any]) -> list[Dict[str, Any]]:
             except:
                 max_dias = ''
 
+            # Los folios de Contacto no tienen póliza asociada (nunca calzan
+            # en el catálogo de arriba); su máximo de atención es fijo: 1 día.
+            if tipo_folio == 'Contacto':
+                max_dias = 1
 
-            current_day = datetime.now(timezone.utc)
+            current_day = datetime.now(timezone.utc) - timedelta(hours=6)
             created_day = case_data.get('CreatedDate')
             created_day = ajustar_horas(created_day)
             created_day = dateutil.parser.parse(created_day)

@@ -8,6 +8,7 @@ class tipo_folios:
         'Siniestros vehículos' : 'diccionario_siniestros',
         'Siniestros vida' : 'diccionario_siniestros',
         'Cancelación' : 'diccionario_cancelacion',
+        'Contacto' : 'diccionario_emision',
     }
 
     referencia_clientes = {
@@ -334,6 +335,37 @@ class tiempos_folios:
             }
         }
     }
+
+class normalizacion_expediente:
+    """
+    Reglas para normalizar el expediente/colaborador recibido según la empresa,
+    usadas para buscar la cuenta correcta en Salesforce por
+    No_expediente_No_colaborador__c antes de consultar sus folios.
+
+    tamano: longitud exacta que debe tener el expediente normalizado.
+    tipo:
+        'numerico' -> el expediente es solo dígitos. Si llega más corto de lo
+            esperado se completa con ceros a la izquierda; si llega más largo
+            (ceros a la izquierda de más) se le quitan ceros sobrantes.
+        'rfc' -> el expediente es un RFC. Si llega más largo de lo esperado
+            (RFC completo de 13 caracteres con homoclave) se truncan los
+            caracteres sobrantes al final, quedándose con los primeros
+            `tamano` caracteres (la homoclave se descarta); si llega más
+            corto se completa con ceros a la izquierda.
+
+    Los códigos de empresa se comparan sin distinguir mayúsculas/minúsculas.
+    """
+    REGLAS = {
+        "STRM": {"tamano": 7, "tipo": "numerico"},
+        "BIMBO": {"tamano": 5, "tipo": "numerico"},
+        "CTBR": {"tamano": 8, "tipo": "numerico"},
+        "CAJA": {"tamano": 5, "tipo": "numerico"},
+        "EMP_STRM": {"tamano": 6, "tipo": "numerico"},
+        "TEC": {"tamano": 8, "tipo": "numerico"},
+        "MAC": {"tamano": 10, "tipo": "rfc"},
+        "OTROS": {"tamano": 10, "tipo": "rfc"},
+    }
+
 
 class campos_cotizacion:
     nombres_legibles = {
