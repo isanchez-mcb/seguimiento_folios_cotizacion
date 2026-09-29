@@ -21,10 +21,10 @@ from app.services.sf_create_data import crear_nota_generica, crear_tarea_folio, 
 RECORD_TYPE_CONTACTO = "9.- Contacto"
 OFICINA = "MCB Cervantes"
 ORIGEN_DEFAULT = "Lucia"
-#COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
-COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
-#OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
-OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
+COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
+#COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
+OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
+#OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
 #OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
 
