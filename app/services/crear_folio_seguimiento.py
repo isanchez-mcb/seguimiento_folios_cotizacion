@@ -23,7 +23,7 @@ OFICINA = "MCB Cervantes"
 ORIGEN_DEFAULT = "Lucia"
 COLA_EJECUTIVOS_SAC = "Ejecutivos SAC"
 #COLA_EJECUTIVOS_SAC = "Pruebas Desarrollo" #Pruebas
-OWNER_RESPALDO_SAC = "005WR000000OCC9YAO"
+OWNER_RESPALDO_SAC = "005WR000000OCCdYAO"
 #OWNER_RESPALDO_SAC = "005WR000008PRlCYAW" #Pruebas
 #OWNER_RESPALDO_SAC = '005ct00000BdIOYAA3' #SANDBOX
 MENSAJE_RESPALDO_ASESOR = "Pronto se le asignará un asesor"
@@ -372,14 +372,31 @@ def crear_folio_seguimiento(
     telefono = request.telefono.strip() if request.telefono and request.telefono.strip() else "no proporcionado"
 
     if poliza is not None:
-        descripcion_contacto = (
-            f"Tipo de movimiento: {request.tipo_movimiento}\n"
-            f"Número de póliza localizada: {poliza.get('Name')}\n"
-            f"Ramo: {request.ramo or 'no especificado'}\n"
-            f"Correo: {correo}\n"
-            f"Teléfono: {telefono}\n"
-            f"Origen: {origen}"
-        )
+        es_gmm = bool(request.ramo and request.ramo.strip().upper() == "GMM")
+        if es_gmm:
+            # En GMM, poliza['Name'] es la póliza maestra+certificado sin la
+            # letra de sufijo (ej. "42682042-13164"), que no distingue entre
+            # 000013164A/B/C/D (varios certificados emparejan igual). Se
+            # agrega el número tal cual lo escribió el usuario para que el
+            # asesor sepa a cuál certificado se refiere exactamente.
+            descripcion_contacto = (
+                f"Tipo de movimiento: {request.tipo_movimiento}\n"
+                f"Póliza localizada: {poliza.get('Name')}\n"
+                f"Certificado solicitado: {numero_poliza}\n"
+                f"Ramo: {request.ramo or 'no especificado'}\n"
+                f"Correo: {correo}\n"
+                f"Teléfono: {telefono}\n"
+                f"Origen: {origen}"
+            )
+        else:
+            descripcion_contacto = (
+                f"Tipo de movimiento: {request.tipo_movimiento}\n"
+                f"Número de póliza localizada: {poliza.get('Name')}\n"
+                f"Ramo: {request.ramo or 'no especificado'}\n"
+                f"Correo: {correo}\n"
+                f"Teléfono: {telefono}\n"
+                f"Origen: {origen}"
+            )
     else:
         print("No se proporcionó número de póliza o no se encontró; creando folio de contingencia.")
         descripcion_contacto = (
