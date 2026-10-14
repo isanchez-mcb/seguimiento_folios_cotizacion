@@ -288,8 +288,8 @@ def crear_lead_campo(
     2. Resuelve Ramos_de_interes__c y el RecordType (Masivo / Persona física
        - Nuevos negocios / Persona moral - Nuevos negocios) según empresa y seguros
     3. Valida expediente_colaborador (si el negocio lo requiere) y company (si es moral)
-    4. Obtiene OwnerId: para Masivo, el usuario del asesor externo (o el de respaldo si
-       no tiene cuenta activa); para Nuevos negocios (física o moral), siempre el de respaldo
+    4. Obtiene OwnerId: el usuario del asesor externo si tiene cuenta activa en Salesforce
+       (igual para Masivo y Nuevos negocios), o el owner de respaldo si no tiene cuenta
     5. Crea el Lead con createLead() (sin reintento silencioso ante expediente duplicado)
     6. Crea nota con seguros + negocio (si aplica) usando crear_nota_generica()
     7. Crea tarea de seguimiento asociada al owner del prospecto
@@ -325,16 +325,11 @@ def crear_lead_campo(
             detail=f"No se encontró asesor externo con número: {request.numero_asesor}"
         )
 
-    if empresa_sf:
-        # Masivo: si el asesor tiene cuenta de usuario activa → el User es el owner.
-        # Si no → se asigna al owner de respaldo.
-        user_id = verificar_cuenta_usuario(request.numero_asesor, sf)
-        owner_id = user_id or OWNER_RESPALDO
-        print(f"Asesor {request.numero_asesor} → owner asignado: {owner_id}")
-    else:
-        # Nuevos negocios (física o moral): siempre va al owner de respaldo.
-        owner_id = OWNER_RESPALDO
-        print(f"Prospecto de Nuevos negocios → owner de respaldo: {owner_id}")
+    # Si el asesor tiene cuenta de usuario activa → el User es el owner (Masivo y
+    # Nuevos negocios funcionan igual). Si no → se asigna al owner de respaldo.
+    user_id = verificar_cuenta_usuario(request.numero_asesor, sf)
+    owner_id = user_id or OWNER_RESPALDO
+    print(f"Asesor {request.numero_asesor} → owner asignado: {owner_id}")
 
     nombre_asesor = asesor_data.get('Name', 'Desconocido')
     asesor_telefono = asesor_data.get('Numero_telefonico__c')

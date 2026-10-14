@@ -160,10 +160,7 @@ El backend usa los valores de `seguros` para decidir automáticamente si el pros
 
 1. Se valida `expediente_colaborador` (si aplica) y `company` (si aplica) — errores `400` si faltan.
 2. Se busca el asesor externo — `404` si no existe.
-3. **Asignación de owner en Salesforce** (no visible en la respuesta):
-   - Masivo (STRM/BIMBO): si el asesor tiene cuenta de usuario activa, él es el owner; si no, se asigna a un owner de respaldo.
-   - Nuevos negocios (física o moral): siempre se asigna al owner de respaldo.
-   - En todos los casos, el campo `Asesor_externo__c` del registro queda con el asesor real capturado.
+3. **Asignación de owner en Salesforce** (no visible en la respuesta): si el asesor tiene cuenta de usuario activa, él es el owner; si no, se asigna a un owner de respaldo. Igual para Masivo (STRM/BIMBO) y para Nuevos negocios (física o moral). En todos los casos, el campo `Asesor_externo__c` del registro queda con el asesor real capturado.
 4. **Contingencias por duplicado** (transparentes para el frontend, siempre responde `200`):
    - Si Salesforce detecta que la persona **ya es cliente** (cuenta existente) → se crea una **Opportunity** en esa cuenta en vez de un Lead nuevo.
    - Si Salesforce detecta que **ya existe un prospecto (Lead)** con esos datos → no se duplica nada; solo se agrega una **tarea de seguimiento** sobre ese Lead con los datos de la nueva solicitud.
