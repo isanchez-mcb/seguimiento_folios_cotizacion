@@ -104,6 +104,7 @@ class CreateLeadCampoRequest(BaseModel):
     company: Optional[str] = None
     seguros: List[str]
     numero_asesor: str
+    origen_prospecto: Optional[str] = None
 
 class CreateLeadCampoResponse(BaseModel):
     lead_id: str

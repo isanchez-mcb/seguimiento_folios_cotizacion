@@ -209,7 +209,7 @@ def _crear_oportunidad_contingencia(
         'OwnerId': owner_id,
         'StageName': 'Nueva',
         'CloseDate': close_date,
-        'Origen_de_oportunidad__c': 'Trabajo en Campo',
+        'Origen_de_oportunidad__c': request.origen_prospecto or 'Trabajo en Campo',
         'RecordTypeId': record_type_id,
         'Asesor_externo__c': asesor_data['Id'],
     }
@@ -343,7 +343,7 @@ def crear_lead_campo(
     nombre_completo = f"{request.nombre} {apellido_completo}"
 
     lead_data = {
-        'LeadSource': 'Ofrecimiento en campo',
+        'LeadSource': request.origen_prospecto or 'Ofrecimiento en campo',
         'FirstName': request.nombre,
         'LastName': apellido_completo,
         'Email': request.email,

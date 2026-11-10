@@ -85,6 +85,7 @@ Registra un prospecto capturado en campo (formulario vía QR) y lo asigna en Sal
 | `company` | string | **Condicional** | Obligatorio solo si `seguros` corresponde a un caso de Persona Moral (ver más abajo). |
 | `seguros` | string[] | Sí | Valores válidos dependen de `empresa` — ver catálogos abajo. |
 | `numero_asesor` | string | Sí | Debe existir y estar activo (mismo asesor que valida `/buscar`). |
+| `origen_prospecto` | string | No | Sobrescribe el origen por defecto (`LeadSource` del Lead / `Origen_de_oportunidad__c` de la Opportunity de contingencia). Si no se envía, o se envía vacío/`null`, se usa el valor por defecto existente. |
 
 #### Códigos de `empresa`
 
