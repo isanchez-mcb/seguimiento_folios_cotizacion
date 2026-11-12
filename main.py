@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.api.endpoints import folios, cotizacion, registro_campaign, seguimiento, asesores_externos
+from app.api.endpoints import folios, cotizacion, registro_campaign, registro_campaign_dinamico, seguimiento, asesores_externos
 from fastapi.middleware.cors import CORSMiddleware
 
 origins = [
@@ -24,5 +24,6 @@ app.add_middleware(
 app.include_router(folios.router)
 app.include_router(cotizacion.router)
 app.include_router(registro_campaign.router)
+app.include_router(registro_campaign_dinamico.router)
 app.include_router(seguimiento.router)
 app.include_router(asesores_externos.router)

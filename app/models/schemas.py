@@ -91,6 +91,24 @@ class RegistroCampaignResponse(BaseModel):
     lead_id: Optional[str] = None
     campaign_member_id: str
     negocio: str
+
+class RegistroCampaignDinamicoRequest(BaseModel):
+    campaign_id: str
+    expediente: Optional[str] = None
+    telefono: Optional[str] = None
+    correo: Optional[str] = None
+    negocio: Optional[str] = None
+    primer_nombre: Optional[str] = None
+    segundo_nombre: Optional[str] = None
+    apellidos: Optional[str] = None
+    ocupacion: Optional[str] = None
+
+class RegistroCampaignDinamicoResponse(BaseModel):
+    account_id: Optional[str] = None
+    contact_id: Optional[str] = None
+    lead_id: Optional[str] = None
+    campaign_member_id: str
+    negocio: str
 class CreateLeadCampoRequest(BaseModel):
     nombre: str
     apellido_paterno: str
