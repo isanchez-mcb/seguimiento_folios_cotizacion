@@ -274,20 +274,21 @@ def createCampaignMember(sf, member_data: dict) -> str:
         raise
 
 
-def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descripcion: str) -> bool:
+def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descripcion: str, subject: str = 'Seguimiento de campaña') -> bool:
     """
     Crea una tarea en Salesforce asociada a un prospecto/contacto (WhoId) y una campaña (WhatId).
-    
+
     Nota: Salesforce NO permite WhatId (campaña) cuando WhoId es un Lead.
     En ese caso, la campaña se incluye en la descripción.
-    
+
     Args:
         sf: Instancia autenticada de Salesforce.
         who_id: ID del prospecto (Lead) o contacto (WhoId).
         campaign_id: ID de la campaña (WhatId, solo si WhoId es Contacto).
         owner_id: ID del usuario propietario de la tarea.
         descripcion: Descripción base de la tarea.
-    
+        subject: Asunto de la tarea (default 'Seguimiento de campaña').
+
     Returns:
         True si se creó correctamente, False en caso contrario.
     """
@@ -310,7 +311,7 @@ def crear_tarea_campana(sf, who_id: str, campaign_id: str, owner_id: str, descri
         task_data = {
             'WhoId': who_id,
             'OwnerId': owner_id,
-            'Subject': 'Seguimiento de campaña',
+            'Subject': subject,
             'ActivityDate': activity_date,
             'Status': 'Not Started',
             'Priority': 'High',

@@ -22,6 +22,7 @@ RECORD_TYPE_MASIVO = "Masivo"
 RECORD_TYPE_NN_FISICA = "Persona física - Nuevos negocios"
 COLA_EJECUTIVOS_NN = "Ejecutivos Nuevos Negocios"
 LEAD_SOURCE_DINAMICO = "Sitio web"
+SUBJECT_TAREA_CAMPANA = "Seguimiento de Campaña Buen Fin 2026"
 
 
 def _resolver_nombre_completo(request: RegistroCampaignDinamicoRequest) -> str:
@@ -137,7 +138,7 @@ def _buscar_ultimos_owners_campana(sf: Salesforce, campaign_id: str, limit: int 
     )
     query_tareas = (
         "SELECT OwnerId, CreatedDate FROM Task "
-        f"WHERE WhatId = '{campaign_id}' AND Subject = 'Seguimiento de campaña' "
+        f"WHERE WhatId = '{campaign_id}' AND Subject = '{SUBJECT_TAREA_CAMPANA}' "
         f"ORDER BY CreatedDate DESC LIMIT {limit}"
     )
 
@@ -197,7 +198,92 @@ def _asignar_propietario_carrusel_dinamico(sf: Salesforce, campaign_id: str) -> 
     return candidato['id'], candidato['name']
 
 
-# ─── Nuevos Negocios: siempre Lead nuevo, owner = cola fija ────────
+def _buscar_miembros_cola(sf: Salesforce, nombre_cola: str) -> list:
+    """
+    Devuelve los Users activos miembros de la cola `nombre_cola` (GroupMember),
+    para rotarlos en un carrusel. A diferencia de buscar_asesor_activo (usado
+    por el carrusel de Telemarketing), aquí NO se filtra por disponibilidad en
+    Omnichannel: todos los miembros de la cola entran al carrusel.
+    """
+    try:
+        query_cola = (
+            "SELECT UserOrGroupId FROM GroupMember "
+            f"WHERE Group.Name = '{nombre_cola}' AND Group.Type = 'Queue'"
+        )
+        resultado_cola = query_con_reintento(sf, query_cola)
+        ids_miembros = [rm['UserOrGroupId'] for rm in resultado_cola['records']]
+        if not ids_miembros:
+            return []
+
+        ids_in = "','".join(ids_miembros)
+        query_usuarios = f"SELECT Id, Name FROM User WHERE Id IN ('{ids_in}') AND IsActive = True"
+        resultado_usuarios = query_con_reintento(sf, query_usuarios)
+
+        miembros = [{'id': u['Id'], 'name': u['Name']} for u in resultado_usuarios['records']]
+        print(f"Miembros activos de la cola '{nombre_cola}': {miembros}")
+        return miembros
+    except Exception as e:
+        print(f"Error al buscar miembros de la cola '{nombre_cola}': {e}")
+        return []
+
+
+def _buscar_ultimos_owners_lead_nn(sf: Salesforce, campaign_id: str, limit: int = 5) -> list:
+    """
+    Último turno del carrusel de Nuevos Negocios, scoped a esta campaña.
+    El flujo de Nuevos Negocios siempre crea un Lead (nunca actualiza cuenta
+    existente), así que basta con mirar el OwnerId de los últimos Leads de
+    esta campaña con Negocio__c = 'NUEVOS NEGOCIOS' (se excluyen los leads
+    Masivo de la misma campaña: son carruseles independientes, con pools de
+    usuarios distintos).
+    """
+    query = (
+        "SELECT OwnerId, CreatedDate FROM Lead "
+        f"WHERE Campana_del__c = '{campaign_id}' AND Negocio__c = 'NUEVOS NEGOCIOS' "
+        f"ORDER BY CreatedDate DESC LIMIT {limit}"
+    )
+    try:
+        result = query_con_reintento(sf, query)
+        return [r['OwnerId'] for r in result['records']]
+    except Exception as e:
+        print(f"Error al consultar últimos Leads de Nuevos Negocios de la campaña: {e}")
+        return []
+
+
+def _asignar_propietario_carrusel_nn(sf: Salesforce, campaign_id: str) -> Tuple[str, str]:
+    """
+    Carrusel para Nuevos Negocios: rota entre TODOS los miembros de la cola
+    'Ejecutivos Nuevos Negocios' (sin filtrar por disponibilidad/Omnichannel),
+    scoped a esta campaña. Si la cola no tiene miembros, cae de vuelta a
+    asignar la cola misma como owner (comportamiento previo).
+    """
+    owners_list = _buscar_miembros_cola(sf, COLA_EJECUTIVOS_NN)
+    size = len(owners_list)
+
+    if size == 0:
+        print(f"La cola '{COLA_EJECUTIVOS_NN}' no tiene miembros activos. Asignando a la cola directamente.")
+        cola_id = _obtener_cola_id(COLA_EJECUTIVOS_NN, sf)
+        return cola_id, COLA_EJECUTIVOS_NN
+
+    owners_list.sort(key=lambda x: x['id'])
+    print(f"DEBUG: Miembros de la cola '{COLA_EJECUTIVOS_NN}' ordenados para el carrusel: {owners_list}")
+
+    just_ids = [owner['id'] for owner in owners_list]
+    last_owners_ids = _buscar_ultimos_owners_lead_nn(sf, campaign_id)
+    print(f"DEBUG: Últimos Owners de Nuevos Negocios en la campaña {campaign_id}: {last_owners_ids}")
+
+    start_index = 0
+    for last_owner in last_owners_ids:
+        if last_owner in just_ids:
+            start_index = (just_ids.index(last_owner) + 1) % size
+            print(f"DEBUG: El último en atender fue {last_owner}. Turno inicial para índice: {start_index}")
+            break
+
+    candidato = owners_list[start_index]
+    print(f"¡Asignado por carrusel de Nuevos Negocios! -> ID: {candidato['id']}, Nombre: {candidato['name']}")
+    return candidato['id'], candidato['name']
+
+
+# ─── Nuevos Negocios: siempre Lead nuevo, owner = carrusel de la cola ──
 
 def _crear_lead_nuevos_negocios(
     request: RegistroCampaignDinamicoRequest,
@@ -207,7 +293,10 @@ def _crear_lead_nuevos_negocios(
     last_name = _resolver_nombre_completo(request)
 
     record_type_id = obtener_record_type_id(sf, 'Lead', RECORD_TYPE_NN_FISICA)
-    owner_id = _obtener_cola_id(COLA_EJECUTIVOS_NN, sf)
+    owner_id, _nombre_ejecutivo = _asignar_propietario_carrusel_nn(sf, request.campaign_id)
+
+    print("Re-obteniendo sesión de Salesforce tras la asignación del carrusel...")
+    sf = get_salesforce_data()
 
     lead_data = {
         'LeadSource': LEAD_SOURCE_DINAMICO,
@@ -237,8 +326,8 @@ def _crear_lead_nuevos_negocios(
     _crear_nota_ocupacion(lead_id, request, sf, last_name)
 
     descripcion_tarea = f"Registro en campaña desde landing page.\nLead: {lead_id}"
-    owner_tarea = owner_id or COLA_EJECUTIVOS_NN
-    tarea_creada = crear_tarea_campana(sf, lead_id, request.campaign_id, owner_tarea, descripcion_tarea)
+    owner_tarea = owner_id or _obtener_cola_id(COLA_EJECUTIVOS_NN, sf)
+    tarea_creada = crear_tarea_campana(sf, lead_id, request.campaign_id, owner_tarea, descripcion_tarea, subject=SUBJECT_TAREA_CAMPANA)
     if tarea_creada:
         print(f"Tarea de campaña creada para lead {lead_id}")
     else:
@@ -320,7 +409,7 @@ def _crear_lead_masivo(
 
     descripcion_tarea = f"Registro en campaña desde landing page.\nLead: {lead_id}"
     owner_tarea = owner_id or COLA_EJECUTIVOS_NN
-    tarea_creada = crear_tarea_campana(sf, lead_id, request.campaign_id, owner_tarea, descripcion_tarea)
+    tarea_creada = crear_tarea_campana(sf, lead_id, request.campaign_id, owner_tarea, descripcion_tarea, subject=SUBJECT_TAREA_CAMPANA)
     if tarea_creada:
         print(f"Tarea de campaña creada para lead {lead_id}")
     else:
@@ -478,7 +567,7 @@ def _actualizar_cuenta_existente(
     if campaign_member_id != "EXISTENTE":
         descripcion_tarea = f"Registro en campaña desde landing page.\nContacto: {contact_id}\nCuenta: {account_id}"
         owner_tarea = owner_id or COLA_EJECUTIVOS_NN
-        tarea_creada = crear_tarea_campana(sf, contact_id, request.campaign_id, owner_tarea, descripcion_tarea)
+        tarea_creada = crear_tarea_campana(sf, contact_id, request.campaign_id, owner_tarea, descripcion_tarea, subject=SUBJECT_TAREA_CAMPANA)
         if tarea_creada:
             print(f"Tarea de campaña creada para contacto {contact_id}")
         else:
